@@ -1,0 +1,161 @@
+{
+  "elasticsearch": {
+    "search_indices": ["amazon-products-000001", "amazon-products-000002"],
+    "autocomplete_indices": ["amazon-products-autocomplete-000001", "amazon-products-autocomplete-000002"],
+    "search_timeout_seconds": 20,
+    "autocomplete_timeout_seconds": 10,
+    "track_total_hits": true
+  },
+  "limits": {
+    "result_size": 20,
+    "autocomplete_fetch_size": 15,
+    "autocomplete_display_size": 5,
+    "autocomplete_min_chars": 3,
+    "autocomplete_cache_ttl_seconds": 30
+  },
+  "search_methods": {
+    "exact_asin": { "field": "parent_asin", "boost": 25 },
+    "phrase": { "field": "title", "boost": 10 },
+    "multi_match": {
+      "type": "best_fields",
+      "operator": "and",
+      "boost": 4,
+      "fields": {
+        "title": 7,
+        "title.tr": 6,
+        "categories_text": 3,
+        "categories_text.tr": 3,
+        "description": 1.5,
+        "description.tr": 1.5,
+        "features": 1.5,
+        "features.tr": 1.5
+      }
+    },
+    "fuzzy": {
+      "type": "best_fields",
+      "fuzziness": "AUTO",
+      "prefix_length": 2,
+      "max_expansions": 30,
+      "boost": 1,
+      "fields": {
+        "title": 6,
+        "title.tr": 5,
+        "categories_text": 2,
+        "categories_text.tr": 2
+      }
+    },
+    "autocomplete": {
+      "field": "title.autocomplete",
+      "operator": "and"
+    }
+  },
+  "translation": {
+    "enabled": true,
+    "autocomplete_enabled": true,
+    "file": "config/query_translations.json",
+    "source_language": "tr",
+    "target_language": "en",
+    "max_variants": 3,
+    "phrase_boost": 6,
+    "token_boost": 2,
+    "min_query_length": 2,
+    "cache_ttl_seconds": 300
+  },
+  "dynamic_intent": {
+    "enabled": true,
+    "cache_ttl_seconds": 300,
+    "max_category_candidates": 5,
+    "minimum_query_length": 3,
+    "aggregation_size": 10,
+    "boost": 8,
+    "timeout_seconds": 5,
+    "search_fields": {
+      "title": 4,
+      "categories_text": 6,
+      "categories_text.tr": 5
+    },
+    "aggregation_fields": [
+      "categories",
+      "main_category",
+      "source_category"
+    ]
+  },
+  "source_fields": {
+    "search": [
+      "parent_asin", "title", "main_category", "categories", "source_category",
+      "store", "price", "average_rating", "rating_number", "description",
+      "features", "image_url"
+    ],
+    "suggestions": [
+      "parent_asin", "title", "store", "price", "average_rating", "rating_number",
+      "image_url", "main_category", "categories", "source_category"
+    ]
+  },
+  "product_url_template": "https://www.amazon.com/dp/{asin}",
+  "ui": {
+    "hero_logo": "🛍️",
+    "hero_title": "Milyonlarca ürün içinde aradığını bul",
+    "hero_subtitle": "Yazım hatalarına toleranslı, çok alanlı Elasticsearch ürün araması",
+    "search_placeholder": "Örn: wireless headphones",
+    "placeholder_image": "https://via.placeholder.com/160x160.png?text=G%C3%B6rsel+Yok",
+    "example_queries": ["wireless headphones", "air filter", "smartwatch", "coffee grinder"],
+    "debounce_ms": 350,
+    "intent_fallback_icon": "🏷️",
+    "labels": {
+      "search_button": "Ara",
+      "settings_panel_title": "🔧 Arama Ayarları",
+      "toggle_phrase": "İfade eşleşmesi",
+      "toggle_multi_match": "Çok alanlı arama",
+      "toggle_fuzzy": "Yazım hatası toleransı",
+      "toggle_exact_asin": "ASIN önceliği",
+      "toggle_live_suggestions": "Canlı öneriler",
+      "system_status_title": "Sistem Durumu",
+      "status_connected": "Bağlı",
+      "status_ready": "Hazır",
+      "suggestion_pick_button": "🔎 Bu ürünü ara",
+      "suggestion_open_amazon_button": "Amazon'da aç",
+      "suggest_panel_title": "En alakalı öneriler",
+      "chip_phrase": "Phrase",
+      "chip_multi_match": "Multi-field",
+      "chip_fuzzy": "Fuzzy",
+      "chip_exact_asin": "Exact ASIN",
+      "chip_live_suggestions": "Live suggestions",
+      "chip_none": "Aktif yöntem yok",
+      "method_phrase": "İfade eşleşmesi",
+      "method_multi_match": "Çok alanlı arama",
+      "method_fuzzy": "Yazım hatası toleransı",
+      "method_exact_asin": "ASIN önceliği",
+      "empty_state_icon": "🔍",
+      "empty_state_text": "Bir ürün adı yazın ya da örneklerden birini deneyin"
+    },
+    "help_text": {
+      "toggle_phrase": "Kelimelerin başlıktaki sırasını ödüllendirir.",
+      "toggle_multi_match": "Başlık, kategori, açıklama ve özelliklerde arar.",
+      "toggle_fuzzy": "Yanlış yazılmış kelimelere yakın sonuçlar bulur.",
+      "toggle_exact_asin": "Tam ürün kodu eşleşmesini en üste taşır.",
+      "toggle_live_suggestions": "Yazarken en alakalı 5 ürünü gösterir."
+    },
+    "messages": {
+      "config_missing_env": "Elastic Cloud bağlantı bilgileri eksik: **{missing}** ortam değişken(ler)i tanımlı değil. Uygulamayı başlatmadan önce bu değişkenleri ayarlayıp yeniden başlatın.",
+      "config_load_error": "Yapılandırma yüklenemedi: {error}",
+      "connection_error": "Elastic Cloud'a bağlanılamadı. ELASTICSEARCH_URL değerinin doğru olduğundan ve internet bağlantınızın çalıştığından emin olun.",
+      "timeout_error": "Elasticsearch isteği zaman aşımına uğradı. Lütfen tekrar deneyin.",
+      "generic_request_error": "Arama sırasında beklenmeyen bir hata oluştu.",
+      "auth_error": "Kimlik doğrulama başarısız (401): API key geçersiz veya eksik. ELASTICSEARCH_API_KEY değerini kontrol edin.",
+      "forbidden_error": "Yetki hatası (403): API key'in `{index}` index'i üzerinde okuma yetkisi yok.",
+      "not_found_error": "Index bulunamadı (404): `{index}` bulunamadı. Index adlarını ve deployment'ı kontrol edin.",
+      "es_error": "Elasticsearch bir hata döndürdü: {status}{detail}",
+      "response_decode_error": "Elasticsearch yanıtı çözümlenemedi.",
+      "empty_query_warning": "Lütfen aramadan önce bir ürün adı yazın.",
+      "no_method_warning": "Normal arama için en az bir arama yöntemi açık olmalı.",
+      "settings_changed_info": "Arama ayarları değişti. Sonuçları güncellemek için tekrar arayın.",
+      "no_results_info": "\"{query}\" için sonuç bulunamadı. Farklı bir arama deneyin.",
+      "suggestions_unavailable_warning": "Canlı öneriler şu anda alınamadı.",
+      "suggestions_min_chars_caption": "Öneriler için en az {min_chars} karakter yazın.",
+      "score_disclaimer_caption": "Skor, Elasticsearch relevance değeridir; olasılık yüzdesi değildir.",
+      "result_header_query": "\"{query}\" için {total:,} sonuç",
+      "result_header_meta": "İlk {shown} sonuç gösteriliyor · Aktif yöntemler: {methods}",
+      "system_status_caption": "Elasticsearch: {status}  \n Aranan index sayısı: {index_count}  \n Sonuç limiti: {result_size}  \n Öneri limiti: {suggestion_limit}"
+    }
+  }
+}

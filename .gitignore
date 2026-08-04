@@ -3,3 +3,9 @@
 __pycache__/
 *.pyc
 .streamlit/secrets.toml
+
+# full_amazon_importer.py runtime output — resumable state, not source
+# (see CLAUDE.md "Generated/local-only files")
+import_progress.log
+amazon_import_checkpoint.json
+import_errors.jsonl

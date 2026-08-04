@@ -1,0 +1,35 @@
+{
+  "phrases": {
+    "kablosuz kulaklık": ["wireless headphones", "wireless headset"],
+    "kablosuz kulaklıklar": ["wireless headphones", "wireless headset"],
+    "oyuncu faresi": ["gaming mouse"],
+    "telefon şarj aleti": ["phone charger", "cell phone charger"],
+    "kahve öğütücü": ["coffee grinder"],
+    "tuvalet kağıdı": ["toilet paper", "bath tissue"],
+    "kedi maması": ["cat food"],
+    "akıllı saat": ["smartwatch", "smart watch"],
+    "hava filtresi": ["air filter"],
+    "telefon kılıfı": ["phone case", "cell phone case"]
+  },
+  "terms": {
+    "kablosuz": ["wireless"],
+    "kulaklık": ["headphones", "headset"],
+    "kulaklıklar": ["headphones", "headset"],
+    "oyuncu": ["gaming"],
+    "fare": ["mouse"],
+    "faresi": ["mouse"],
+    "telefon": ["phone", "cell phone"],
+    "şarj": ["charger"],
+    "kahve": ["coffee"],
+    "öğütücü": ["grinder"],
+    "tuvalet": ["toilet"],
+    "kağıdı": ["paper"],
+    "kedi": ["cat"],
+    "maması": ["food"],
+    "akıllı": ["smart"],
+    "saat": ["watch"],
+    "hava": ["air"],
+    "filtresi": ["filter"],
+    "kılıfı": ["case"]
+  }
+}

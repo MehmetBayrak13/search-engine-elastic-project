@@ -2,7 +2,7 @@
 Ürün Arama — Elastic Cloud destekli, tıklanabilir kartlı e-ticaret arama arayüzü.
 
 Çalıştırma:
-    pip install streamlit requests
+    pip install -r requirements.txt
 
     # Linux / macOS:
     #   export ELASTICSEARCH_URL="https://<deployment>.es.<region>.cloud.es.io"
@@ -12,6 +12,11 @@
     #   $env:ELASTICSEARCH_API_KEY="<api_key>"
 
     streamlit run app.py
+
+Arama davranışı (index adları, boostlar, limitler, UI metinleri, intent
+kuralları, çeviri sözlüğü) `config/` altındaki JSON dosyalarından ve
+`config.py`'den okunur. Sırlar (URL/API key) yalnızca ortam değişkenlerinden
+gelir; hiçbir zaman config dosyalarına yazılmaz.
 """
 
 import html
@@ -22,6 +27,8 @@ import requests
 import streamlit as st
 import streamlit.components.v1 as components
 
+from config import ConfigError, load_intent_rules, load_search_config, load_translations
+
 # streamlit-keyup: gerçek tuş-bazlı (debounce'lı) canlı input. Kurulu değilse
 # uygulama düz st.text_input'a düşer (bozulmaz), ancak canlılık azalır.
 try:
@@ -31,49 +38,41 @@ except Exception:  # ImportError ve olası kurulum sorunları
     HAS_KEYUP = False
 
 # ---------------------------------------------------------------------------
-# Ayarlar
+# Yapılandırma yükleme
 # ---------------------------------------------------------------------------
 ES_URL = os.getenv("ELASTICSEARCH_URL")
 ES_API_KEY = os.getenv("ELASTICSEARCH_API_KEY")
 if ES_URL:
     ES_URL = ES_URL.rstrip("/")
 
+CONFIG_ERROR: str | None = None
+try:
+    CONFIG = load_search_config()
+    INTENT_RULES = load_intent_rules()
+    TRANSLATIONS = load_translations()
+except ConfigError as error:
+    CONFIG = None
+    INTENT_RULES = {}
+    TRANSLATIONS = None
+    CONFIG_ERROR = str(error)
+
 # Yalnızca ana indexlerde arama yapılır (test ve v1 dahil edilmez).
-INDEX_NAME = "amazon-products-000001,amazon-products-000002"
-# Canlı öneriler ayrı bir Edge NGram test indexinden gelir.
-AUTOCOMPLETE_INDEX_NAME = "amazon-products-autocomplete-test"
-RESULT_SIZE = 20
+INDEX_NAME = CONFIG.elasticsearch.search_index_expr if CONFIG else ""
+# Canlı öneriler ayrı bir Edge NGram autocomplete indexinden gelir.
+AUTOCOMPLETE_INDEX_NAME = CONFIG.elasticsearch.autocomplete_index_expr if CONFIG else ""
+RESULT_SIZE = CONFIG.limits.result_size if CONFIG else 20
 
-# Tam ürün aramasında yanıtta dönen alanlar.
-SOURCE_FIELDS = [
-    "parent_asin",
-    "title",
-    "main_category",
-    "categories",
-    "source_category",
-    "store",
-    "price",
-    "average_rating",
-    "rating_number",
-    "description",
-    "features",
-    "image_url",
-]
+# Tam ürün aramasında ve canlı önerilerde yanıtta dönen alanlar.
+SOURCE_FIELDS = list(CONFIG.source_fields.search) if CONFIG else []
+SUGGESTION_SOURCE_FIELDS = list(CONFIG.source_fields.suggestions) if CONFIG else []
+PLACEHOLDER_IMAGE = CONFIG.ui.placeholder_image if CONFIG else ""
 
-# Canlı öneri (autocomplete) sorgusunda yanıtta dönen alanlar.
-SUGGESTION_SOURCE_FIELDS = [
-    "parent_asin",
-    "title",
-    "store",
-    "price",
-    "average_rating",
-    "rating_number",
-    "image_url",
-    "main_category",
-    "categories",
-    "source_category",
-]
-PLACEHOLDER_IMAGE = "https://via.placeholder.com/160x160.png?text=G%C3%B6rsel+Yok"
+# st.cache_data'nın ttl parametresi decorator uygulanırken (import zamanında)
+# değerlendirilir; bu yüzden CONFIG yüklendikten hemen sonra modül seviyesinde
+# sabitlere okunur. CONFIG yüklenemezse (bkz. CONFIG_ERROR) güvenli varsayılanlar
+# kullanılır — check_configuration() zaten kullanıcıyı ayrı olarak uyarır.
+_DISCOVERY_CACHE_TTL = CONFIG.dynamic_intent.cache_ttl_seconds if CONFIG else 300
+_AUTOCOMPLETE_CACHE_TTL = CONFIG.limits.autocomplete_cache_ttl_seconds if CONFIG else 30
 
 st.set_page_config(page_title="Ürün Arama", page_icon="🔍", layout="wide")
 
@@ -163,7 +162,13 @@ st.markdown(
 # Yapılandırma kontrolü
 # ---------------------------------------------------------------------------
 def check_configuration():
-    """Gerekli ortam değişkenlerini kontrol eder; eksikse hata mesajı döner."""
+    """Gerekli ortam değişkenlerini ve config dosyalarını kontrol eder;
+    eksik/geçersizse hata mesajı döner."""
+    if CONFIG_ERROR:
+        if CONFIG is not None:
+            return CONFIG.ui.message("config_load_error", error=CONFIG_ERROR)
+        return f"Yapılandırma yüklenemedi: {CONFIG_ERROR}"
+
     missing = []
     if not ES_URL:
         missing.append("ELASTICSEARCH_URL")
@@ -171,63 +176,39 @@ def check_configuration():
         missing.append("ELASTICSEARCH_API_KEY")
 
     if missing:
-        return (
-            "Elastic Cloud bağlantı bilgileri eksik: "
-            f"**{', '.join(missing)}** ortam değişken(ler)i tanımlı değil. "
-            "Uygulamayı başlatmadan önce bu değişkenleri ayarlayıp yeniden başlatın."
-        )
+        return CONFIG.ui.message("config_missing_env", missing=", ".join(missing))
     return None
 
 
 # ---------------------------------------------------------------------------
 # Niyet (intent) tespiti — kategori farkındalıklı reranking
 # ---------------------------------------------------------------------------
-# Kolay genişletilebilir kural yapısı. İlk aşamada yalnızca "watch" gerçek uygulanır.
-INTENT_RULES = {
-    "watch": {
-        # Bu terimlerden biri sorguda geçerse niyet algılanır.
-        "query_terms": [
-            "watch", "watches", "wristwatch", "wrist watch",
-            "smartwatch", "smart watch", "kol saati", "akıllı saat", "saat",
-        ],
-        # Sorguda bu terimlerden biri geçerse niyet iptal edilir (dışlama yapılmaz).
-        "excluded_when_query_contains": [
-            "book", "books", "novel", "kitabı", "kitap",
-        ],
-        # Kategori sinyali olarak boostlanacak terimler (text alanlarında).
-        "category_boost_terms": [
-            "watches", "smartwatch", "wearable technology",
-            "wrist watches", "men's watches", "women's watches",
-        ],
-        # Geri plana atılacak / dışlanabilecek kategori terimleri.
-        "negative_categories": ["books", "book"],
-    },
-}
-
-
+# Kurallar config/intent_rules.json'dan yüklenir (INTENT_RULES). Bu, kolay
+# genişletilebilir bir yapı sağlar: yeni bir intent eklemek için kod
+# değiştirmeye gerek yoktur, JSON dosyasına yeni bir kural eklemek yeterlidir.
 def detect_search_intent(query_text: str) -> dict:
     """
     Sorgu metninden kategori niyetini tespit eder (casefold ile normalize).
 
     Dönüş:
-      {"intent": <ad|None>, "apply_exclusion": <bool>, "rule": <kural|None>}
+      {"intent": <ad|None>, "apply_exclusion": <bool>, "rule": <IntentRule|None>}
 
     Kural: niyet terimlerinden biri geçiyorsa niyet algılanır. Ancak sorguda
     dışlama tetikleyici bir terim (ör. "book") de varsa niyet algılanır fakat
-    kitap dışlaması UYGULANMAZ ("watch book" → kitaplar dışlanmaz).
+    dışlama UYGULANMAZ (ör. hem tetikleyici hem dışlama terimi aynı sorguda
+    geçerse dışlama iptal edilir; kurallar tamamen config'ten gelir).
     """
     text = (query_text or "").casefold()
 
     for name, rule in INTENT_RULES.items():
-        # Niyet terimi kelime/ifade olarak geçiyor mu?
-        hit = any(_contains_term(text, t) for t in rule["query_terms"])
+        if not rule.enabled:
+            continue
+
+        hit = any(_contains_term(text, t) for t in rule.query_terms)
         if not hit:
             continue
 
-        # Dışlama tetikleyici terim var mı? Varsa dışlama uygulanmaz.
-        blocked = any(
-            _contains_term(text, t) for t in rule["excluded_when_query_contains"]
-        )
+        blocked = any(_contains_term(text, t) for t in rule.excluded_when_query_contains)
         return {
             "intent": name,
             "apply_exclusion": not blocked,
@@ -245,14 +226,15 @@ def _contains_term(text: str, term: str) -> bool:
     term = term.casefold()
     if " " in term:
         return term in text
-    # Tek kelime: kelime sınırı ile ara (ör. "watch" -> "watchband" eşleşmesin).
+    # Tek kelime: kelime sınırı ile ara (ör. bir terim, o terimi içeren daha
+    # uzun bir kelimenin alt dizesi olarak yanlışlıkla eşleşmesin).
     return re.search(rf"(?<!\w){re.escape(term)}(?!\w)", text) is not None
 
 
 def _build_intent_signals(query_text: str):
     """
-    Sorgudan watch-intent boost ve dışlama sorgularını üretir (paylaşılan mantık;
-    hem normal arama hem autocomplete önerileri kullanır).
+    Sorgudan kategori-intent boost ve dışlama sorgularını üretir (paylaşılan
+    mantık; hem normal arama hem autocomplete önerileri kullanır).
 
     Dönüş: (intent_boost_queries, intent_exclusions)
     Bu sorgular tek başına belge döndürmez; yalnızca ana eşleşmenin üzerine
@@ -263,20 +245,20 @@ def _build_intent_signals(query_text: str):
     info = detect_search_intent(query_text)
     rule = info.get("rule")
     if rule:
-        for term in rule["category_boost_terms"]:
+        for term in rule.category_boost_terms:
             intent_boost_queries.append({
-                "match_phrase": {"categories_text": {"query": term, "boost": 12}}
+                "match_phrase": {"categories_text": {"query": term, "boost": rule.category_boost}}
             })
             intent_boost_queries.append({
-                "match_phrase": {"categories_text.tr": {"query": term, "boost": 8}}
+                "match_phrase": {"categories_text.tr": {"query": term, "boost": rule.category_boost_tr}}
             })
         if info.get("apply_exclusion"):
             # Kitap belgeleri bazen yalnızca main_category/source_category
-            # üzerinden "Books" taşıyor (categories/categories_text boş olabiliyor).
+            # üzerinden kategori taşıyor (categories/categories_text boş olabiliyor).
             # Bu yüzden dışlamayı tüm ilgili alanlara uygula: keyword alanlarda
             # term, text alanlarda match_phrase. Her terim için bir bool.should
             # (minimum_should_match=1) bloğu must_not'a eklenir.
-            for term in rule["negative_categories"]:
+            for term in rule.negative_categories:
                 intent_exclusions.append({
                     "bool": {
                         "should": [
@@ -292,20 +274,339 @@ def _build_intent_signals(query_text: str):
     return intent_boost_queries, intent_exclusions
 
 
+# ---------------------------------------------------------------------------
+# Türkçe → İngilizce sorgu genişletme (çok-dilli arama)
+# ---------------------------------------------------------------------------
+def _normalize_query_text(query_text: str) -> str:
+    """Casefold + tekrarlı boşlukları sadeleştirir (gerçek Türkçe stemming
+    Elasticsearch analyzer'ında yapılır; burada yalnızca sözlük araması için
+    normalize edilir)."""
+    return " ".join((query_text or "").casefold().split())
+
+
+def expand_multilingual_query(query_text: str, translations=None) -> dict:
+    """
+    Türkçe bir sorguyu, config/query_translations.json sözlüğünü kullanarak
+    olası İngilizce karşılıklarına genişletir. Elasticsearch'e istek atmaz —
+    saf (pure) ve test edilebilir bir fonksiyondur.
+
+    Öncelik: tam ifade çevirisi > kelime bazlı çeviri. Sözlükte eşleşme
+    yoksa yalnızca orijinal sorgu ile devam edilir (fallback).
+
+    Dönüş:
+      {
+        "original_query": str,
+        "normalized_query": str,
+        "phrase_translations": [str, ...],
+        "token_translations": [str, ...],
+        "expanded_queries": [str, ...],
+        "used_translation": bool,
+      }
+    """
+    translations = translations if translations is not None else TRANSLATIONS
+    original = query_text or ""
+    normalized = _normalize_query_text(original)
+
+    max_variants = CONFIG.translation.max_variants if CONFIG else 3
+
+    phrase_translations: list[str] = []
+    token_translations: list[str] = []
+
+    if translations and normalized:
+        phrase_hits = translations.phrases.get(normalized)
+        if phrase_hits:
+            for variant in phrase_hits:
+                if variant not in phrase_translations:
+                    phrase_translations.append(variant)
+                if len(phrase_translations) >= max_variants:
+                    break
+
+        # Kelime bazlı çeviri yalnızca tam ifade eşleşmesi yoksa denenir.
+        if not phrase_translations:
+            for token in normalized.split():
+                for variant in translations.terms.get(token, ()):
+                    if variant not in token_translations:
+                        token_translations.append(variant)
+                if len(token_translations) >= max_variants:
+                    break
+            token_translations = token_translations[:max_variants]
+
+    expanded_queries = [original]
+    if normalized and normalized != original.casefold():
+        expanded_queries.append(normalized)
+    for variant in phrase_translations + token_translations:
+        if variant not in expanded_queries:
+            expanded_queries.append(variant)
+
+    return {
+        "original_query": original,
+        "normalized_query": normalized,
+        "phrase_translations": phrase_translations,
+        "token_translations": token_translations,
+        "expanded_queries": expanded_queries,
+        "used_translation": bool(phrase_translations or token_translations),
+    }
+
+
+def _build_translation_lexical_queries(query_text: str) -> list[dict]:
+    """
+    Çeviri sözlüğünden üretilen İngilizce alternatifleri, zorunlu lexical
+    eşleşme grubuna (bool.must içindeki bool.should) EK seçenekler olarak
+    ekler. Böylece salt Türkçe bir sorgu, İngilizce ürün kataloğunda da
+    sonuç bulabilir — çeviri sinyali zorunlu eşleşmeyi atlamaz, ona bir
+    alternatif ekler.
+    """
+    if not CONFIG or not CONFIG.translation.enabled:
+        return []
+    if len(_normalize_query_text(query_text)) < CONFIG.translation.min_query_length:
+        return []
+
+    expansion = expand_multilingual_query(query_text)
+    queries: list[dict] = []
+
+    phrase_field = CONFIG.search_methods.phrase.field
+    for phrase in expansion["phrase_translations"]:
+        queries.append({
+            "match_phrase": {
+                phrase_field: {"query": phrase, "boost": CONFIG.translation.phrase_boost}
+            }
+        })
+
+    if expansion["token_translations"]:
+        queries.append({
+            "multi_match": {
+                "query": " ".join(expansion["token_translations"]),
+                "type": "best_fields",
+                "boost": CONFIG.translation.token_boost,
+                "fields": CONFIG.search_methods.multi_match.es_fields,
+            }
+        })
+
+    return queries
+
+
+# ---------------------------------------------------------------------------
+# Dinamik kategori keşfi (Elasticsearch aggregation tabanlı)
+# ---------------------------------------------------------------------------
+# intent_rules.json artık ana intent motoru DEĞİLDİR — burası ana motordur.
+# intent_rules.json, bunun üzerine binen opsiyonel bir override katmanıdır
+# (alias/force-boost/exclusion/display-label/icon/priority/enabled). Bu
+# katman tamamen boş ({}) olsa da kategori keşfi kesintisiz çalışır.
+def build_category_discovery_query(
+    query_text: str,
+    extra_query_texts: list[str] | None = None,
+) -> dict:
+    """
+    Yalnızca kategori adaylarını keşfetmek için size=0 bir aggregation
+    sorgusu üretir. Ürün döndürmez; `aggregation_fields` (config'ten) üzerinde
+    terms aggregation çalıştırır. `extra_query_texts` ile normalize edilmiş
+    sorgu ve/veya en yüksek öncelikli çeviri de eşleşme havuzuna eklenebilir.
+
+    Kullanıcıdan ham alan adı veya ham Query DSL alınmaz; tüm alanlar ve
+    limitler config/search_config.json'daki `dynamic_intent` bölümünden gelir.
+    """
+    dyn = CONFIG.dynamic_intent
+
+    candidate_texts = [text for text in [query_text, *(extra_query_texts or [])] if text]
+    should = [
+        {
+            "multi_match": {
+                "query": text,
+                "type": "best_fields",
+                "fields": dyn.es_search_fields,
+            }
+        }
+        for text in candidate_texts
+    ]
+
+    aggs = {
+        agg_name: {"terms": {"field": field, "size": dyn.aggregation_size}}
+        for agg_name, field in dyn.aggregation_bucket_map.items()
+    }
+
+    query = {"bool": {"should": should, "minimum_should_match": 1}} if should else {"match_all": {}}
+
+    return {
+        "size": 0,
+        "track_total_hits": False,
+        "timeout": f"{dyn.timeout_seconds}s",
+        "query": query,
+        "aggs": aggs,
+    }
+
+
+@st.cache_data(ttl=_DISCOVERY_CACHE_TTL, show_spinner=False)
+def _fetch_category_aggregations(query_text: str, extra_query_texts: tuple[str, ...]):
+    """
+    Kategori keşif aggregation'ını Elasticsearch'ten getiren cache'li katman.
+    TTL, _DISCOVERY_CACHE_TTL (config'teki dynamic_intent.cache_ttl_seconds)
+    üzerinden gelir. Kendi cache'i
+    vardır; canlı öneri cache'inden (_fetch_suggestion_hits) bağımsızdır.
+
+    Dönüş: (aggregations_dict, hata_mesajı). Hata varsa aggregations_dict {} döner
+    — bu, çağıran tarafın (discover_category_intent) hatayı yutup normal
+    aramayı engellememesini sağlar; kategori keşfi tek hata noktası olamaz.
+    """
+    payload = build_category_discovery_query(query_text, list(extra_query_texts))
+    data, error = _post_search(payload, timeout=CONFIG.dynamic_intent.timeout_seconds, index=INDEX_NAME)
+    if error:
+        return {}, error
+    return data.get("aggregations", {}), None
+
+
+def discover_category_intent(query_text: str) -> list[dict]:
+    """
+    Sorgudan (orijinal + normalize edilmiş + en yüksek öncelikli İngilizce
+    çeviri kullanılarak) Elasticsearch aggregation'ları ile kategori adayları
+    keşfeder. Önceden `intent_rules.json`da tanımlanmamış tamamen yeni ürün
+    tipleri için de (ör. "toilet paper", "gaming mouse", "cat food") çalışır.
+
+    Başarısız olursa (timeout, bağlantı hatası, min. sorgu uzunluğu altında,
+    devre dışı) sessizce boş liste döner — normal aramayı ASLA engellemez.
+
+    Dönüş: [{"value": str, "field": str, "doc_count": int, "rank": int,
+             "source": "dynamic_category_discovery"}, ...]
+    """
+    dyn = CONFIG.dynamic_intent
+    if not dyn.enabled:
+        return []
+
+    normalized = _normalize_query_text(query_text)
+    if len(normalized) < dyn.minimum_query_length:
+        return []
+
+    expansion = expand_multilingual_query(query_text)
+    extra_texts: list[str] = []
+    if expansion["normalized_query"] and expansion["normalized_query"] != expansion["original_query"]:
+        extra_texts.append(expansion["normalized_query"])
+
+    top_translations = expansion["phrase_translations"] or expansion["token_translations"]
+    if top_translations:
+        extra_texts.append(top_translations[0])
+
+    aggregations, error = _fetch_category_aggregations(query_text, tuple(extra_texts))
+    if error or not aggregations:
+        return []
+
+    candidates: list[dict] = []
+    for agg_name, field in dyn.aggregation_bucket_map.items():
+        buckets = aggregations.get(agg_name, {}).get("buckets", [])
+        for rank, bucket in enumerate(buckets, start=1):
+            value = bucket.get("key")
+            if not value:
+                continue
+            candidates.append({
+                "value": value,
+                "field": field,
+                "doc_count": bucket.get("doc_count", 0),
+                "rank": rank,
+                "source": "dynamic_category_discovery",
+            })
+
+    candidates.sort(key=lambda item: item["doc_count"], reverse=True)
+    return candidates[: dyn.max_category_candidates]
+
+
+def build_dynamic_category_boosts(candidates: list[dict]) -> list[dict]:
+    """
+    Kategori keşif adaylarını, ana ürün sorgusunun bool.should (rerank-only)
+    kısmına eklenecek boost sorgularına çevirir. `aggregation_fields`
+    (categories/main_category/source_category) her zaman keyword-uyumlu
+    olduğundan `term` sorgusu kullanılır. Bu sinyaller tek başına belge
+    döndürmez; yalnızca zaten lexical olarak eşleşmiş ürünleri yeniden sıralar.
+    """
+    if not candidates:
+        return []
+
+    boost = CONFIG.dynamic_intent.boost
+    return [
+        {"term": {candidate["field"]: {"value": candidate["value"], "boost": boost}}}
+        for candidate in candidates
+    ]
+
+
+def resolve_intent_signals(query_text: str, include_dynamic: bool = True):
+    """
+    Manuel intent kuralları (`intent_rules.json`) ile dinamik kategori
+    keşfini birleştiren ana giriş noktası. `intent_rules.json` artık ana
+    motor DEĞİLDİR; yalnızca dinamik keşfin üzerine binen opsiyonel bir
+    override katmanıdır:
+      - bir kuralın `negative_categories`'i (exclusions) aktifse, dinamik
+        keşfin önerdiği aynı değerdeki kategori adayları da elenir
+        (override, keşfi çelmeyecek şekilde bastırır).
+      - `include_dynamic=False` yalnızca autocomplete tarafından kullanılır
+        (dinamik keşif autocomplete'te ÇALIŞMAZ).
+
+    Dönüş: (boost_queries, exclusions) — build_search_query'nin bool.should
+    ve bool.must_not'una doğrudan eklenir.
+    """
+    info = detect_search_intent(query_text)
+    boost_queries, exclusions = _build_intent_signals(query_text)
+
+    if include_dynamic and CONFIG.dynamic_intent.enabled:
+        rule = info.get("rule")
+        blocked_values = set()
+        if rule and info.get("apply_exclusion"):
+            blocked_values = {value.casefold() for value in rule.negative_categories}
+
+        candidates = discover_category_intent(query_text)
+        candidates = [c for c in candidates if str(c["value"]).casefold() not in blocked_values]
+        boost_queries = boost_queries + build_dynamic_category_boosts(candidates)
+
+    return boost_queries, exclusions
+
+
+# ---------------------------------------------------------------------------
+# Sorgu oluşturma (canlı öneriler)
+# ---------------------------------------------------------------------------
 def build_autocomplete_query(
     query_text: str,
-    result_size: int = 15,
+    result_size: int | None = None,
     apply_intent_reranking: bool = True,
 ) -> dict:
     """
-    Canlı öneriler için gerçek Edge NGram test indexi sorgusu.
+    Canlı öneriler için Edge NGram autocomplete indexi sorgusu.
 
     Normal lexical yöntemlerden (phrase/multi/fuzzy/asin switchleri) bağımsızdır:
-    zorunlu eşleşme yalnızca `title.autocomplete` alanı üzerindendir (operator=and).
-    watch-intent korunur: saat kategorileri `should` içinde boostlanır, kitap
-    niyeti yoksa kitap kategorileri `must_not` ile dışlanır. Intent sinyalleri
-    tek başına sonuç üretmez; autocomplete eşleşmesi zorunludur.
+    zorunlu eşleşme `title.autocomplete` alanı üzerindendir (operator config'ten
+    gelir). Config'te çeviri autocomplete için açıksa, tam ifade çevirileri de
+    zorunlu eşleşme grubuna alternatif olarak eklenir (kelime bazlı çeviri,
+    kısmi/prefiks sorgularda hatalı genişlemeyi önlemek için eklenmez).
+    intent boost/dışlama korunur. Intent sinyalleri tek başına sonuç üretmez;
+    autocomplete eşleşmesi zorunludur.
     """
+    result_size = result_size if result_size is not None else CONFIG.limits.autocomplete_fetch_size
+
+    autocomplete_field = CONFIG.search_methods.autocomplete.field
+    autocomplete_operator = CONFIG.search_methods.autocomplete.operator
+
+    lexical_queries = [
+        {
+            "match": {
+                autocomplete_field: {
+                    "query": query_text,
+                    "operator": autocomplete_operator,
+                }
+            }
+        }
+    ]
+
+    if CONFIG.translation.enabled and CONFIG.translation.autocomplete_enabled:
+        expansion = expand_multilingual_query(query_text)
+        for phrase in expansion["phrase_translations"]:
+            lexical_queries.append({
+                "match": {
+                    autocomplete_field: {
+                        "query": phrase,
+                        "operator": autocomplete_operator,
+                        "boost": CONFIG.translation.phrase_boost,
+                    }
+                }
+            })
+
+    # Not: yalnızca manuel intent kuralları kullanılır — dinamik kategori
+    # keşfi (Elasticsearch aggregation isteği) her tuş vuruşunda ekstra bir
+    # istek anlamına geleceğinden BİLEREK autocomplete'e dahil edilmez.
     intent_boost_queries = []
     intent_exclusions = []
     if apply_intent_reranking:
@@ -314,19 +615,12 @@ def build_autocomplete_query(
     return {
         "size": result_size,
         "track_total_hits": False,
-        "timeout": "10s",
+        "timeout": f"{CONFIG.elasticsearch.autocomplete_timeout_seconds}s",
         "_source": SUGGESTION_SOURCE_FIELDS,
         "query": {
             "bool": {
                 "must": [
-                    {
-                        "match": {
-                            "title.autocomplete": {
-                                "query": query_text,
-                                "operator": "and",
-                            }
-                        }
-                    }
+                    {"bool": {"should": lexical_queries, "minimum_should_match": 1}}
                 ],
                 "should": intent_boost_queries,
                 "must_not": intent_exclusions,
@@ -344,12 +638,25 @@ def build_search_query(
     enable_multi_match: bool = True,
     enable_fuzzy: bool = True,
     enable_exact_asin: bool = True,
-    result_size: int = RESULT_SIZE,
-    track_total_hits: bool = True,
+    result_size: int | None = None,
+    track_total_hits: bool | None = None,
     apply_intent_reranking: bool = True,
+    intent_boost_queries: list[dict] | None = None,
+    intent_exclusions: list[dict] | None = None,
 ) -> dict:
     """
     Seçili yöntemlere göre intent-farkındalıklı bir Elasticsearch sorgusu üretir.
+    Alan adları ve boostlar config/search_config.json'daki search_methods'tan
+    okunur.
+
+    SAF (I/O yapmaz) bir fonksiyondur — Elasticsearch'e istek atmaz. Dinamik
+    kategori keşfi (Elasticsearch aggregation isteği gerektirir) burada değil,
+    `search_products` içinde `resolve_intent_signals` ile hesaplanır ve
+    sonucu `intent_boost_queries`/`intent_exclusions` olarak bu fonksiyona
+    enjekte edilir. Bu ikisi `None` bırakılırsa (varsayılan çağrı biçimi),
+    yalnızca manuel `intent_rules.json` kuralları (`_build_intent_signals`,
+    saf) kullanılır — böylece bu fonksiyon testlerde ağ çağrısı yapmadan
+    doğrudan çağrılabilir.
 
     Lexical yöntemler (aç/kapa):
       A) parent_asin exact `term`   (enable_exact_asin)
@@ -358,22 +665,29 @@ def build_search_query(
       D) fuzzy `multi_match`         (enable_fuzzy)
 
     Yapı:
-      bool.must   → [ bool.should=lexical, minimum_should_match=1 ]  (zorunlu eşleşme)
-      bool.should → intent kategori boostları (yalnızca sıralamayı iyileştirir)
+      bool.must   → [ bool.should=lexical (+ çeviri alternatifleri), minimum_should_match=1 ]
+      bool.should → intent kategori boostları (manuel + dinamik; yalnızca sıralamayı iyileştirir)
       bool.must_not → intent dışlamaları (kontrollü)
 
     Böylece kategori boostları tek başına belge döndürmez; ürün önce lexical
-    olarak eşleşmek zorundadır. Hiç lexical yöntem yoksa `match_none` döner.
+    (veya çevrilmiş bir lexical alternatif) olarak eşleşmek zorundadır.
+    Hiç lexical yöntem yoksa `match_none` döner.
     """
+    methods = CONFIG.search_methods
+    result_size = result_size if result_size is not None else CONFIG.limits.result_size
+    track_total_hits = (
+        track_total_hits if track_total_hits is not None else CONFIG.elasticsearch.track_total_hits
+    )
+
     lexical_queries = []
 
     # A. Exact ürün kodu eşleşmesi (keyword alan → term)
     if enable_exact_asin:
         lexical_queries.append({
             "term": {
-                "parent_asin": {
+                methods.exact_asin.field: {
                     "value": query_text,
-                    "boost": 25,
+                    "boost": methods.exact_asin.boost,
                     "case_insensitive": True,
                 }
             }
@@ -383,9 +697,9 @@ def build_search_query(
     if enable_phrase:
         lexical_queries.append({
             "match_phrase": {
-                "title": {
+                methods.phrase.field: {
                     "query": query_text,
-                    "boost": 10,
+                    "boost": methods.phrase.boost,
                 }
             }
         })
@@ -395,19 +709,10 @@ def build_search_query(
         lexical_queries.append({
             "multi_match": {
                 "query": query_text,
-                "type": "best_fields",
-                "operator": "and",
-                "boost": 4,
-                "fields": [
-                    "title^7",
-                    "title.tr^6",
-                    "categories_text^3",
-                    "categories_text.tr^3",
-                    "description^1.5",
-                    "description.tr^1.5",
-                    "features^1.5",
-                    "features.tr^1.5",
-                ],
+                "type": methods.multi_match.type,
+                "operator": methods.multi_match.operator,
+                "boost": methods.multi_match.boost,
+                "fields": methods.multi_match.es_fields,
             }
         })
 
@@ -416,17 +721,12 @@ def build_search_query(
         lexical_queries.append({
             "multi_match": {
                 "query": query_text,
-                "type": "best_fields",
-                "fuzziness": "AUTO",
-                "prefix_length": 2,
-                "max_expansions": 30,
-                "boost": 1,
-                "fields": [
-                    "title^6",
-                    "title.tr^5",
-                    "categories_text^2",
-                    "categories_text.tr^2",
-                ],
+                "type": methods.fuzzy.type,
+                "fuzziness": methods.fuzzy.fuzziness,
+                "prefix_length": methods.fuzzy.prefix_length,
+                "max_expansions": methods.fuzzy.max_expansions,
+                "boost": methods.fuzzy.boost,
+                "fields": methods.fuzzy.es_fields,
             }
         })
 
@@ -439,11 +739,22 @@ def build_search_query(
             "query": {"match_none": {}},
         }
 
-    # Intent boost/dışlama sinyalleri (lexical eşleşmeyi zorunlu bırakır).
-    intent_boost_queries = []
-    intent_exclusions = []
+    # Çeviri sözlüğünden gelen alternatifler zorunlu eşleşme grubuna eklenir
+    # (bypass etmez — ek bir "veya" seçeneğidir).
+    lexical_queries.extend(_build_translation_lexical_queries(query_text))
+
+    # Intent boost/dışlama sinyalleri. Çağıran taraf (search_products) zaten
+    # resolve_intent_signals ile manuel+dinamik sinyalleri hesaplayıp enjekte
+    # ettiyse onlar kullanılır; aksi halde (varsayılan, saf çağrı) yalnızca
+    # manuel kurallar hesaplanır — lexical eşleşme zorunluluğunu değiştirmez.
     if apply_intent_reranking:
-        intent_boost_queries, intent_exclusions = _build_intent_signals(query_text)
+        if intent_boost_queries is None and intent_exclusions is None:
+            intent_boost_queries, intent_exclusions = _build_intent_signals(query_text)
+        else:
+            intent_boost_queries = intent_boost_queries or []
+            intent_exclusions = intent_exclusions or []
+    else:
+        intent_boost_queries, intent_exclusions = [], []
 
     bool_query = {
         "must": [
@@ -471,7 +782,7 @@ def build_search_query(
 # ---------------------------------------------------------------------------
 # Elasticsearch isteği
 # ---------------------------------------------------------------------------
-def _post_search(payload: dict, timeout: int = 20, index: str = INDEX_NAME):
+def _post_search(payload: dict, timeout: int = 20, index: str = None):
     """
     Verilen sorgu gövdesini belirtilen index üzerinde Elastic Cloud'a gönderir;
     ortak HTTP ve hata yönetimini tek yerde toplar. Varsayılan index normal
@@ -479,6 +790,9 @@ def _post_search(payload: dict, timeout: int = 20, index: str = INDEX_NAME):
 
     Dönüş: (data_dict, hata_mesaji). Hata varsa data_dict None döner.
     """
+    if index is None:
+        index = INDEX_NAME
+
     headers = {
         "Authorization": f"ApiKey {ES_API_KEY}",
         "Content-Type": "application/json",
@@ -492,30 +806,18 @@ def _post_search(payload: dict, timeout: int = 20, index: str = INDEX_NAME):
             timeout=timeout,
         )
     except requests.exceptions.ConnectionError:
-        return None, (
-            "Elastic Cloud'a bağlanılamadı. ELASTICSEARCH_URL değerinin doğru "
-            "olduğundan ve internet bağlantınızın çalıştığından emin olun."
-        )
+        return None, CONFIG.ui.message("connection_error")
     except requests.exceptions.Timeout:
-        return None, "Elasticsearch isteği zaman aşımına uğradı. Lütfen tekrar deneyin."
+        return None, CONFIG.ui.message("timeout_error")
     except requests.exceptions.RequestException:
-        return None, "Arama sırasında beklenmeyen bir hata oluştu."
+        return None, CONFIG.ui.message("generic_request_error")
 
     if response.status_code == 401:
-        return None, (
-            "Kimlik doğrulama başarısız (401): API key geçersiz veya eksik. "
-            "ELASTICSEARCH_API_KEY değerini kontrol edin."
-        )
+        return None, CONFIG.ui.message("auth_error")
     if response.status_code == 403:
-        return None, (
-            "Yetki hatası (403): API key'in "
-            f"`{index}` index'i üzerinde okuma yetkisi yok."
-        )
+        return None, CONFIG.ui.message("forbidden_error", index=index)
     if response.status_code == 404:
-        return None, (
-            f"Index bulunamadı (404): `{index}` bulunamadı. "
-            "Index adlarını ve deployment'ı kontrol edin."
-        )
+        return None, CONFIG.ui.message("not_found_error", index=index)
     if response.status_code >= 400:
         # Elasticsearch hata gövdesini güvenli biçimde mesaja ekle.
         detail = ""
@@ -529,12 +831,12 @@ def _post_search(payload: dict, timeout: int = 20, index: str = INDEX_NAME):
             detail = f" — {reason}" if reason else f" — {str(body)[:300]}"
         except ValueError:
             detail = f" — {response.text[:300]}" if response.text else ""
-        return None, f"Elasticsearch bir hata döndürdü: {response.status_code}{detail}"
+        return None, CONFIG.ui.message("es_error", status=response.status_code, detail=detail)
 
     try:
         return response.json(), None
     except ValueError:
-        return None, "Elasticsearch yanıtı çözümlenemedi."
+        return None, CONFIG.ui.message("response_decode_error")
 
 
 def search_products(
@@ -547,9 +849,19 @@ def search_products(
     """
     Seçili yöntemlerle üretilen gelişmiş sorguyu Elastic Cloud'a gönderir.
 
+    Normal arama akışının GERÇEK giriş noktasıdır: burada önce
+    `resolve_intent_signals` çağrılır (manuel `intent_rules.json` kuralları +
+    dinamik kategori keşfi Elasticsearch aggregation isteğini içerir), sonra
+    sonuç saf `build_search_query`'ye enjekte edilir. Kategori keşfi
+    başarısız olursa (bkz. discover_category_intent) sessizce boş liste
+    döner; bu, ana ürün aramasını asla engellemez.
+
     Dönüş: (hits_listesi, toplam_sonuc, hata_mesaji)
     Hata varsa hits_listesi None döner.
     """
+    intent_boost_queries, intent_exclusions = resolve_intent_signals(
+        query_text, include_dynamic=True
+    )
     payload = build_search_query(
         query_text,
         enable_phrase=enable_phrase,
@@ -558,9 +870,11 @@ def search_products(
         enable_exact_asin=enable_exact_asin,
         result_size=RESULT_SIZE,
         track_total_hits=True,
+        intent_boost_queries=intent_boost_queries,
+        intent_exclusions=intent_exclusions,
     )
 
-    data, error = _post_search(payload, timeout=20)
+    data, error = _post_search(payload, timeout=CONFIG.elasticsearch.search_timeout_seconds)
     if error:
         return None, 0, error
 
@@ -569,12 +883,14 @@ def search_products(
     return hits, total, None
 
 
-@st.cache_data(ttl=30, show_spinner=False)
+@st.cache_data(ttl=_AUTOCOMPLETE_CACHE_TTL, show_spinner=False)
 def _fetch_suggestion_hits(query_text: str, result_size: int):
     """
-    Canlı önerileri gerçek Edge NGram test indexinden (AUTOCOMPLETE_INDEX_NAME)
-    getiren cache'li katman. 30 sn TTL. Cache anahtarı yalnızca query_text ve
-    result_size'dır; lexical arama switchleri önerileri ETKİLEMEZ.
+    Canlı önerileri Edge NGram autocomplete indexinden (AUTOCOMPLETE_INDEX_NAME)
+    getiren cache'li katman. TTL, _AUTOCOMPLETE_CACHE_TTL (config'teki
+    limits.autocomplete_cache_ttl_seconds) üzerinden gelir. Cache anahtarı
+    yalnızca query_text ve result_size'dır; lexical arama switchleri
+    önerileri ETKİLEMEZ.
 
     Cache güvenliği için yalnızca JSON-benzeri argümanlar/dönüşler kullanılır;
     API key ve bağlantı nesneleri parametre yapılmaz (ortam değişkeni globaldir).
@@ -584,27 +900,30 @@ def _fetch_suggestion_hits(query_text: str, result_size: int):
     payload = build_autocomplete_query(query_text, result_size=result_size)
 
     data, error = _post_search(
-        payload, timeout=10, index=AUTOCOMPLETE_INDEX_NAME
+        payload, timeout=CONFIG.elasticsearch.autocomplete_timeout_seconds, index=AUTOCOMPLETE_INDEX_NAME
     )
     if error:
         return [], error
     return data.get("hits", {}).get("hits", []), None
 
 
-def get_suggestions(query_text: str, max_items: int = 5):
+def get_suggestions(query_text: str, max_items: int | None = None):
     """
-    Gerçek Edge NGram autocomplete önerileri: title.autocomplete alanı üzerinden
-    _score sıralı ürün önerileri (watch-intent boost/dışlama korunur).
+    Edge NGram autocomplete önerileri: title.autocomplete alanı üzerinden
+    _score sıralı ürün önerileri (intent boost/dışlama ve çeviri alternatifleri
+    korunur).
 
-    Elasticsearch'ten 15 hit istenir, Python'da benzersizleştirilir (parent_asin,
-    yoksa title.casefold()) ve en fazla `max_items` öneri döndürülür. Öneriler
-    lexical arama switchlerinden bağımsızdır.
+    Elasticsearch'ten config'teki autocomplete_fetch_size kadar hit istenir,
+    Python'da benzersizleştirilir (parent_asin, yoksa title.casefold()) ve en
+    fazla `max_items` (varsayılan: config'teki autocomplete_display_size)
+    öneri döndürülür. Öneriler lexical arama switchlerinden bağımsızdır.
 
     Dönüş: (suggestions, error)
       - başarılı: (liste, None)
       - hata:     ([], "hata mesajı")
     """
-    hits, error = _fetch_suggestion_hits(query_text, 15)
+    max_items = max_items if max_items is not None else CONFIG.limits.autocomplete_display_size
+    hits, error = _fetch_suggestion_hits(query_text, CONFIG.limits.autocomplete_fetch_size)
     if error:
         return [], error
 
@@ -648,7 +967,7 @@ def render_product_card(hit: dict):
 
     # ASIN: önce parent_asin, yoksa _id
     asin = source.get("parent_asin") or hit.get("_id") or ""
-    product_url = f"https://www.amazon.com/dp/{asin}" if asin else ""
+    product_url = CONFIG.product_url_template.format(asin=asin) if asin else ""
 
     title = source.get("title") or "Ürün adı bulunamadı"
     store = source.get("store") or "Bilinmiyor"
@@ -884,21 +1203,22 @@ def render_suggestion_row(item: dict, idx: int) -> bool:
         components.html(card_html, height=height, scrolling=False)
     with col_actions:
         picked = st.button(
-            "🔎 Bu ürünü ara", key=f"pick_{idx}", use_container_width=True
+            CONFIG.ui.label("suggestion_pick_button", "🔎 Bu ürünü ara"),
+            key=f"pick_{idx}",
+            use_container_width=True,
         )
         asin = item.get("asin") or ""
         if asin:
-            amazon_url = f"https://www.amazon.com/dp/{asin}"
+            amazon_url = CONFIG.product_url_template.format(asin=asin)
+            open_label = CONFIG.ui.label("suggestion_open_amazon_button", "Amazon'da aç")
             if hasattr(st, "link_button"):
-                st.link_button(
-                    "Amazon'da aç", amazon_url, use_container_width=True
-                )
+                st.link_button(open_label, amazon_url, use_container_width=True)
             else:
                 # Güvenli HTML anchor (yeni sekme).
                 safe_url = html.escape(amazon_url, quote=True)
                 st.markdown(
                     f'<a href="{safe_url}" target="_blank" rel="noopener noreferrer">'
-                    "Amazon'da aç</a>",
+                    f"{html.escape(open_label)}</a>",
                     unsafe_allow_html=True,
                 )
     return picked
@@ -920,27 +1240,23 @@ def render_search_settings():
     Sidebar'daki "Arama Ayarları" paneli: her switch'in altında bir açıklama
     ve altta küçük bir sistem durumu alanı. Dönüş: (flags, live_suggestions)
     """
-    st.sidebar.markdown("### 🔧 Arama Ayarları")
+    ui = CONFIG.ui
+    st.sidebar.markdown(f"### {ui.label('settings_panel_title', 'Arama Ayarları')}")
     enable_phrase = _toggle(
-        "İfade eşleşmesi", True, "opt_phrase",
-        "Kelimelerin başlıktaki sırasını ödüllendirir.",
+        ui.label("toggle_phrase"), True, "opt_phrase", ui.help("toggle_phrase"),
     )
     enable_multi = _toggle(
-        "Çok alanlı arama", True, "opt_multi",
-        "Başlık, kategori, açıklama ve özelliklerde arar.",
+        ui.label("toggle_multi_match"), True, "opt_multi", ui.help("toggle_multi_match"),
     )
     enable_fuzzy = _toggle(
-        "Yazım hatası toleransı", True, "opt_fuzzy",
-        "Yanlış yazılmış kelimelere yakın sonuçlar bulur.",
+        ui.label("toggle_fuzzy"), True, "opt_fuzzy", ui.help("toggle_fuzzy"),
     )
     enable_asin = _toggle(
-        "ASIN önceliği", True, "opt_asin",
-        "Tam ürün kodu eşleşmesini en üste taşır.",
+        ui.label("toggle_exact_asin"), True, "opt_asin", ui.help("toggle_exact_asin"),
     )
     st.sidebar.markdown("---")
     live_suggestions = _toggle(
-        "Canlı öneriler", True, "opt_suggest",
-        "Yazarken en alakalı 5 ürünü gösterir.",
+        ui.label("toggle_live_suggestions"), True, "opt_suggest", ui.help("toggle_live_suggestions"),
     )
 
     flags = {
@@ -952,42 +1268,47 @@ def render_search_settings():
 
     # Sistem durumu (gerçek bağlantı doğrulanmadan "Bağlı" denmez).
     st.sidebar.markdown("---")
-    st.sidebar.markdown("#### Sistem Durumu")
-    es_state = "Bağlı" if st.session_state.get("es_ok") else "Hazır"
+    st.sidebar.markdown(f"#### {ui.label('system_status_title', 'Sistem Durumu')}")
+    status_key = "status_connected" if st.session_state.get("es_ok") else "status_ready"
+    es_state = ui.label(status_key)
     st.sidebar.caption(
-        f"Elasticsearch: {es_state}  \n"
-        "Aranan index sayısı: 2  \n"
-        f"Sonuç limiti: {RESULT_SIZE}  \n"
-        "Öneri limiti: 5"
+        ui.message(
+            "system_status_caption",
+            status=es_state,
+            index_count=len(CONFIG.elasticsearch.search_indices),
+            result_size=RESULT_SIZE,
+            suggestion_limit=CONFIG.limits.autocomplete_display_size,
+        )
     )
     return flags, live_suggestions
 
 
-# İngilizce chip etiketleri (üst bölüm) ve Türkçe yöntem etiketleri (sonuç başlığı).
-_CHIP_LABELS = {
-    "enable_phrase": "Phrase",
-    "enable_multi_match": "Multi-field",
-    "enable_fuzzy": "Fuzzy",
-    "enable_exact_asin": "Exact ASIN",
+# Sidebar switch anahtarları ile config'teki chip/method etiket anahtarlarının eşleşmesi.
+_FLAG_CHIP_KEYS = {
+    "enable_phrase": "chip_phrase",
+    "enable_multi_match": "chip_multi_match",
+    "enable_fuzzy": "chip_fuzzy",
+    "enable_exact_asin": "chip_exact_asin",
 }
-_METHOD_LABELS_TR = {
-    "enable_phrase": "İfade eşleşmesi",
-    "enable_multi_match": "Çok alanlı arama",
-    "enable_fuzzy": "Yazım hatası toleransı",
-    "enable_exact_asin": "ASIN önceliği",
+_FLAG_METHOD_KEYS = {
+    "enable_phrase": "method_phrase",
+    "enable_multi_match": "method_multi_match",
+    "enable_fuzzy": "method_fuzzy",
+    "enable_exact_asin": "method_exact_asin",
 }
 
 
 def render_feature_chips(flags: dict, live_suggestions: bool):
     """Arama kutusunun altında aktif özellikleri chip olarak gösterir."""
+    ui = CONFIG.ui
     chips = []
-    for key, label in _CHIP_LABELS.items():
+    for key, chip_key in _FLAG_CHIP_KEYS.items():
         if flags.get(key):
-            chips.append(f'<span class="chip chip-on">{label}</span>')
+            chips.append(f'<span class="chip chip-on">{ui.label(chip_key)}</span>')
     if live_suggestions:
-        chips.append('<span class="chip chip-on">Live suggestions</span>')
+        chips.append(f'<span class="chip chip-on">{ui.label("chip_live_suggestions")}</span>')
     if not chips:
-        chips.append('<span class="chip">Aktif yöntem yok</span>')
+        chips.append(f'<span class="chip">{ui.label("chip_none", "Aktif yöntem yok")}</span>')
     st.markdown(
         f'<div class="chip-row">{"".join(chips)}</div>', unsafe_allow_html=True
     )
@@ -995,13 +1316,14 @@ def render_feature_chips(flags: dict, live_suggestions: bool):
 
 def render_hero():
     """Üst hero/search bölümü başlığı."""
+    ui = CONFIG.ui
     st.markdown(
-        """
+        f"""
         <div class="hero">
-            <div class="hero-logo">🛍️</div>
-            <div class="hero-title">Milyonlarca ürün içinde aradığını bul</div>
+            <div class="hero-logo">{ui.hero_logo}</div>
+            <div class="hero-title">{html.escape(ui.hero_title)}</div>
             <div class="hero-subtitle">
-                Yazım hatalarına toleranslı, çok alanlı Elasticsearch ürün araması
+                {html.escape(ui.hero_subtitle)}
             </div>
         </div>
         """,
@@ -1011,29 +1333,31 @@ def render_hero():
 
 def render_result_header(query_text, total, shown, flags, intent_name):
     """Sonuçların üzerinde sorgu, toplam/gösterilen sayı, yöntemler ve intent."""
+    ui = CONFIG.ui
     e_query = html.escape(query_text)
     methods = ", ".join(
-        _METHOD_LABELS_TR[k] for k, v in flags.items() if v
+        ui.label(_FLAG_METHOD_KEYS[k]) for k, v in flags.items() if v
     ) or "yok"
+
     intent_html = ""
-    if intent_name == "watch":
-        intent_html = (
-            '<div class="intent-badge">🕒 Saat kategorisi niyeti algılandı</div>'
-        )
+    if intent_name and intent_name in INTENT_RULES:
+        rule = INTENT_RULES[intent_name]
+        icon = rule.icon or ui.intent_fallback_icon
+        intent_html = f'<div class="intent-badge">{icon} {html.escape(rule.label)}</div>'
+
+    query_line = ui.message("result_header_query", query=e_query, total=total)
+    meta_line = ui.message("result_header_meta", shown=shown, methods=methods)
+
     st.markdown(
         f"""
         <div class="result-header">
-            <div class="rh-query">"{e_query}" için {total:,} sonuç</div>
-            <div class="rh-meta">İlk {shown} sonuç gösteriliyor · Aktif yöntemler: {methods}</div>
+            <div class="rh-query">{query_line}</div>
+            <div class="rh-meta">{meta_line}</div>
             {intent_html}
         </div>
         """,
         unsafe_allow_html=True,
     )
-
-
-# Boş ekranda gösterilecek örnek sorgular.
-_EXAMPLE_QUERIES = ["wireless headphones", "air filter", "smartwatch", "coffee grinder"]
 
 
 def _select_query(new_value: str):
@@ -1048,17 +1372,19 @@ def _select_query(new_value: str):
 
 def render_empty_state():
     """Arama yapılmadan önce gösterilen canlı boş ekran + örnek sorgu chip'leri."""
+    ui = CONFIG.ui
     st.markdown(
-        """
+        f"""
         <div class="empty-state">
-            <div class="es-icon">🔍</div>
-            <div class="es-text">Bir ürün adı yazın ya da örneklerden birini deneyin</div>
+            <div class="es-icon">{ui.label('empty_state_icon', '🔍')}</div>
+            <div class="es-text">{html.escape(ui.label('empty_state_text'))}</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
-    cols = st.columns(len(_EXAMPLE_QUERIES))
-    for col, example in zip(cols, _EXAMPLE_QUERIES):
+    example_queries = CONFIG.ui.example_queries
+    cols = st.columns(len(example_queries))
+    for col, example in zip(cols, example_queries):
         with col:
             if st.button(example, key=f"ex_{example}", use_container_width=True):
                 _select_query(example)
@@ -1067,17 +1393,18 @@ def render_empty_state():
 
 def _make_search_input(widget_key: str, default_val: str) -> str:
     """
-    Arama kutusunu oluşturur. st_keyup varsa gerçek tuş-bazlı (350ms debounce)
-    input; yoksa düz st.text_input (Enter/odak ile) kullanılır.
+    Arama kutusunu oluşturur. st_keyup varsa gerçek tuş-bazlı (config'teki
+    debounce_ms kadar debounce'lı) input; yoksa düz st.text_input
+    (Enter/odak ile) kullanılır.
     """
     if HAS_KEYUP:
         return st_keyup(
             "Ürün ara",
             value=default_val,
-            debounce=350,
+            debounce=CONFIG.ui.debounce_ms,
             key=widget_key,
             label_visibility="collapsed",
-            placeholder="Örn: wireless headphones",
+            placeholder=CONFIG.ui.search_placeholder,
         )
 
     def _cb():
@@ -1088,7 +1415,7 @@ def _make_search_input(widget_key: str, default_val: str) -> str:
         value=default_val,
         key=widget_key,
         label_visibility="collapsed",
-        placeholder="Örn: wireless headphones",
+        placeholder=CONFIG.ui.search_placeholder,
         on_change=_cb,
     )
 
@@ -1104,6 +1431,7 @@ def main():
         st.error(config_error)
         return
 
+    ui = CONFIG.ui
     flags, live_suggestions = render_search_settings()
     any_method_on = any(flags.values())
     settings_sig = tuple(sorted(flags.items()))
@@ -1122,7 +1450,7 @@ def main():
     with col_input:
         typed = _make_search_input(widget_key, default_val)
     with col_button:
-        if st.button("Ara", type="primary", use_container_width=True):
+        if st.button(ui.label("search_button", "Ara"), type="primary", use_container_width=True):
             st.session_state["run_search"] = True
     # pending_value yalnızca yeni widget'ın default'u olarak bir kez kullanılır.
     st.session_state.pop("pending_value", None)
@@ -1133,25 +1461,28 @@ def main():
     render_feature_chips(flags, live_suggestions)
 
     # -----------------------------------------------------------------------
-    # Canlı öneriler — gerçek Edge NGram test indexi (title.autocomplete).
+    # Canlı öneriler — Edge NGram autocomplete indexi (title.autocomplete).
     # Lexical arama switchlerinden BAĞIMSIZDIR; tüm lexical yöntemler kapalı
-    # olsa bile "Canlı öneriler" açıksa ve sorgu >= 3 karakterse çalışır.
-    # st_keyup ile input değeri ~350ms debounce sonrası backend'e ulaştığında
-    # ilk 5 benzersiz öneri gösterilir. watch-intent boost/dışlama korunur.
+    # olsa bile "Canlı öneriler" açıksa ve sorgu config'teki minimum karakter
+    # sayısına eriştiyse çalışır. st_keyup ile input değeri debounce sonrası
+    # backend'e ulaştığında ilk N (config'teki autocomplete_display_size)
+    # benzersiz öneri gösterilir. Intent boost/dışlama ve çeviri alternatifleri
+    # korunur.
     # -----------------------------------------------------------------------
+    min_chars = CONFIG.limits.autocomplete_min_chars
     show_suggestions = live_suggestions and not st.session_state.pop(
         "hide_suggestions_once", False
     )
     if show_suggestions:
-        if query_text and len(query_text) < 3:
-            st.caption("Öneriler için en az 3 karakter yazın.")
-        elif len(query_text) >= 3:
+        if query_text and len(query_text) < min_chars:
+            st.caption(ui.message("suggestions_min_chars_caption", min_chars=min_chars))
+        elif len(query_text) >= min_chars:
             suggestions, sug_error = get_suggestions(query_text)
             if sug_error:
-                st.warning("Canlı öneriler şu anda alınamadı.")
+                st.warning(ui.message("suggestions_unavailable_warning"))
             elif suggestions:
                 st.markdown(
-                    '<div class="suggest-panel-title">En alakalı öneriler</div>',
+                    f'<div class="suggest-panel-title">{html.escape(ui.label("suggest_panel_title"))}</div>',
                     unsafe_allow_html=True,
                 )
                 for idx, item in enumerate(suggestions):
@@ -1160,9 +1491,7 @@ def main():
                         # önerileri kapat. Amazon otomatik açılmaz.
                         _select_query(item["title"])
                         st.rerun()
-                st.caption(
-                    "Skor, Elasticsearch relevance değeridir; olasılık yüzdesi değildir."
-                )
+                st.caption(ui.message("score_disclaimer_caption"))
 
     # -----------------------------------------------------------------------
     # Normal arama tetikleyicisi
@@ -1172,11 +1501,11 @@ def main():
     if triggered:
         st.session_state["run_search"] = False  # tek seferlik tüket
         if not query_text:
-            st.warning("Lütfen aramadan önce bir ürün adı yazın.")
+            st.warning(ui.message("empty_query_warning"))
         elif not any_method_on:
             # Normal arama için en az bir lexical yöntem gerekir; öneriler
             # yukarıda bağımsız çalışmaya devam eder.
-            st.warning("Normal arama için en az bir arama yöntemi açık olmalı.")
+            st.warning(ui.message("no_method_warning"))
         else:
             with st.spinner("Ürünler aranıyor..."):
                 hits, total, error = search_products(query_text, **flags)
@@ -1200,7 +1529,7 @@ def main():
                   "search_query", "search_sig"):
             st.session_state.pop(k, None)
         has_stored = False
-        st.info("Arama ayarları değişti. Sonuçları güncellemek için tekrar arayın.")
+        st.info(ui.message("settings_changed_info"))
 
     if not has_stored:
         if not query_text:
@@ -1217,7 +1546,7 @@ def main():
     stored_query = st.session_state.get("search_query", query_text)
 
     if not hits:
-        st.info(f'"{stored_query}" için sonuç bulunamadı. Farklı bir arama deneyin.')
+        st.info(ui.message("no_results_info", query=stored_query))
         return
 
     intent_name = detect_search_intent(stored_query).get("intent")

@@ -1,0 +1,22 @@
+{
+  "watch": {
+    "query_terms": [
+      "watch", "watches", "wristwatch", "wrist watch",
+      "smartwatch", "smart watch", "kol saati", "akıllı saat", "saat"
+    ],
+    "excluded_when_query_contains": [
+      "book", "books", "novel", "kitabı", "kitap"
+    ],
+    "category_boost_terms": [
+      "watches", "smartwatch", "wearable technology",
+      "wrist watches", "men's watches", "women's watches"
+    ],
+    "negative_categories": ["books", "book"],
+    "category_boost": 12,
+    "category_boost_tr": 8,
+    "label": "Saat kategorisi niyeti algılandı",
+    "icon": "🕒",
+    "priority": 10,
+    "enabled": true
+  }
+}
