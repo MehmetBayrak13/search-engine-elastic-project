@@ -4,13 +4,14 @@
     "electronics_computers": {
       "label": "Electronics & Computers",
       "title_terms": [
-        "laptop", "notebook computer", "computer", "desktop pc", "pc",
+        "laptop", "notebook computer", "computer", "desktop pc",
         "gaming mouse", "wireless mouse", "bluetooth mouse", "computer mouse",
         "optical mouse", "mouse pad", "keyboard", "gaming keyboard", "monitor",
         "graphics card", "gpu", "cpu", "processor", "motherboard",
         "router", "modem", "webcam", "headphone", "headphones", "earbud",
         "earbuds", "bluetooth speaker", "smartphone", "cell phone", "tablet",
         "phone charger", "usb cable", "hdmi cable", "ssd", "hard drive",
+        "gaming pc",
         "memory card", "printer", "scanner", "digital camera", "camera lens",
         "drone", "smartwatch", "smart watch", "wearable technology",
         "fitness tracker", "microphone", "projector", "power bank",
@@ -37,7 +38,7 @@
         "makeup", "make-up", "cosmetic", "cosmetics", "lipstick", "mascara",
         "foundation cream", "concealer", "eyeshadow", "blush", "skincare",
         "skin care", "moisturizer", "face serum", "cleanser", "shampoo",
-        "conditioner", "perfume", "fragrance spray", "nail polish",
+        "hair conditioner", "perfume", "fragrance spray", "nail polish",
         "makeup brush", "beauty blender", "hair dryer", "curling iron",
         "hair straightener", "razor", "shaving cream", "body lotion",
         "sunscreen", "eyeliner", "lip gloss", "facial mask"
@@ -109,7 +110,7 @@
         "appliances"
       ],
       "aliases": {},
-      "conflicting_families": ["automotive"]
+      "conflicting_families": []
     },
     "clothing_fashion": {
       "label": "Clothing & Fashion",
@@ -121,10 +122,10 @@
       ],
       "category_terms": [
         "clothing", "clothing, shoes & jewelry", "shoes", "jewelry",
-        "luggage & travel gear", "fashion"
+        "luggage & travel gear"
       ],
       "aliases": {},
-      "conflicting_families": ["automotive", "grocery", "tools_home_improvement"]
+      "conflicting_families": ["grocery", "tools_home_improvement"]
     },
     "toys_games": {
       "label": "Toys & Games",

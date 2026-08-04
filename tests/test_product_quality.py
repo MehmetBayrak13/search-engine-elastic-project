@@ -150,6 +150,150 @@ def test_mickey_minnie_disney_mouse_products_do_not_false_positive(title, catego
 
 
 # ---------------------------------------------------------------------------
+# Taxonomy kalibrasyonu v3: 6.500 ürünlük (5.000 rastgele + 15x100 sorgu)
+# canlı örneklemede title_category_mismatch flag'i alan 85 üründen 55'inin
+# (%65) kök nedeni beş genel/tekrarlayan (tek ürüne özel OLMAYAN) taksonomi
+# sorunuydu — bkz. product_quality.py yerine config/category_taxonomy.json
+# değişiklikleri. Her biri için pozitif (sinyal hâlâ çalışıyor) ve negatif
+# (yanlış flag artık gelmiyor) test eklenmiştir.
+# ---------------------------------------------------------------------------
+
+def test_bare_fashion_department_alone_does_not_signal_clothing():
+    # main_category="AMAZON FASHION" gibi salt departman adı (detaylı
+    # categories breadcrumb'ı boşken) çok zayıf/güvenilmez bir sinyaldi —
+    # 23/85 mismatch bu tek desenden geliyordu (bkz. "Blue Light Blocking
+    # Computer Glasses" gibi ürünler, AMAZON FASHION departmanına dahil ama
+    # elektronik değil, giyim de değil).
+    taxonomy = pq.load_category_taxonomy()
+    cfg = pq.load_quality_config()
+    scores = pq._family_scores(pq.normalize_text("amazon fashion"), taxonomy, "category", cfg)
+    assert "clothing_fashion" not in scores
+
+
+def test_bare_fashion_department_no_longer_flags_mismatch():
+    result = pq.evaluate_product_quality(
+        _product(
+            title="Blue Light Blocking Computer Glasses",
+            categories=[],
+            main_category="AMAZON FASHION",
+            categories_text="AMAZON FASHION Amazon_Fashion",
+        )
+    )
+    assert MISMATCH_FLAG not in result["quality_flags"]
+
+
+def test_real_clothing_breadcrumb_still_signals_clothing_fashion():
+    result = pq.evaluate_product_quality(
+        _product(
+            title="Leather Jacket",
+            categories_text="Clothing, Shoes & Jewelry | Clothing | Coats & Jackets",
+        ),
+        include_explanation=True,
+    )
+    assert result["quality_explanation"]["signals"]["category_family"] == "clothing_fashion"
+
+
+def test_motorcycle_apparel_under_automotive_no_longer_flags_mismatch():
+    # Motosiklet/otomotiv koruyucu giysileri (ceket, pantolon, çorap...)
+    # meşru biçimde Automotive kategorisinde ama başlıkta jenerik giyim
+    # kelimeleri geçiyor — 16/85 mismatch bu iki ailenin (clothing_fashion /
+    # automotive) gereksiz yere "conflicting" işaretlenmesinden geliyordu.
+    result = pq.evaluate_product_quality(
+        _product(
+            title="Maiyu Motorcycle Rain Suit Waterproof Rain Jacket and Pants",
+            categories_text="Automotive | Motorcycle & Powersports | Protective Gear | Rainwear | Rain Jackets",
+        )
+    )
+    assert MISMATCH_FLAG not in result["quality_flags"]
+
+
+def test_clothing_fashion_still_conflicts_with_tools_home_improvement():
+    # automotive kaldırıldı ama clothing_fashion'ın DİĞER conflict'leri
+    # (ör. tools_home_improvement) hâlâ aktif olmalı.
+    result = pq.evaluate_product_quality(
+        _product(title="Power Drill Wrench Tool Set", categories_text="Clothing, Shoes & Jewelry")
+    )
+    assert MISMATCH_FLAG in result["quality_flags"]
+
+
+def test_car_vacuum_cleaner_under_automotive_no_longer_flags_mismatch():
+    # "vacuum cleaner"/"light bulb" gibi home_kitchen ifadeleri, araca özel
+    # (Car Care | Vacuums) ürünlerde de meşru biçimde geçiyor — 8/85 mismatch
+    # home_kitchen'ın TEK conflict'i olan automotive'den geliyordu.
+    result = pq.evaluate_product_quality(
+        _product(
+            title="Portable Car Vacuum Cleaner Handheld",
+            categories_text="Automotive | Car Care | Interior Care | Vacuums",
+        )
+    )
+    assert MISMATCH_FLAG not in result["quality_flags"]
+
+
+def test_home_kitchen_legitimate_match_still_scores_high():
+    result = pq.evaluate_product_quality(
+        _product(title="Cordless Vacuum Cleaner", categories_text="Home & Kitchen | Vacuums & Floor Care")
+    )
+    assert MISMATCH_FLAG not in result["quality_flags"]
+    assert result["title_category_consistency"] >= 0.7
+
+
+def test_bare_pc_as_piece_abbreviation_no_longer_signals_electronics():
+    # Amazon başlıklarında "1 Pc"/"6 pc Set" gibi kullanımlar "personal
+    # computer" değil "piece" anlamına gelir — bare "pc" 5/85 mismatch'in
+    # kaynağıydı (ör. "Trim Tweezing Mirror ... 1 Pc", Beauty kategorisinde).
+    taxonomy = pq.load_category_taxonomy()
+    cfg = pq.load_quality_config()
+    scores = pq._family_scores(pq.normalize_text("1 Pc Wax Pen and 1 Pc Brush Pen"), taxonomy, "title", cfg)
+    assert "electronics_computers" not in scores
+
+
+def test_bare_pc_piece_abbreviation_no_longer_flags_mismatch():
+    result = pq.evaluate_product_quality(
+        _product(
+            title="Trim Tweezing Mirror 10x Magnifying. 1 Pc",
+            categories_text="Beauty & Personal Care | Tools & Accessories | Mirrors",
+        )
+    )
+    assert MISMATCH_FLAG not in result["quality_flags"]
+
+
+@pytest.mark.parametrize("title", ["Desktop PC Tower Gaming Computer", "Gaming PC Prebuilt Tower"])
+def test_pc_phrases_still_signal_electronics(title):
+    taxonomy = pq.load_category_taxonomy()
+    cfg = pq.load_quality_config()
+    scores = pq._family_scores(pq.normalize_text(title), taxonomy, "title", cfg)
+    assert "electronics_computers" in scores
+
+
+def test_bare_conditioner_as_air_conditioner_no_longer_signals_beauty():
+    # "conditioner" bare hem "hair conditioner" hem "air conditioner" ile
+    # eşleşiyordu — 3/85 mismatch otomotiv Air Conditioner parçalarından
+    # geliyordu. Artık yalnızca "hair conditioner" phrase'i sinyal üretir.
+    taxonomy = pq.load_category_taxonomy()
+    cfg = pq.load_quality_config()
+    scores = pq._family_scores(pq.normalize_text("Air Conditioner Compressor Control Relay"), taxonomy, "title", cfg)
+    assert "beauty_personal_care" not in scores
+
+
+def test_air_conditioner_part_no_longer_flags_mismatch():
+    result = pq.evaluate_product_quality(
+        _product(
+            title="Airtex 1R1057 Air Conditioner Compressor Control Relay",
+            categories_text="Automotive | Replacement Parts | Switches & Relays | Relays | Air Conditioning",
+        )
+    )
+    assert MISMATCH_FLAG not in result["quality_flags"]
+
+
+def test_hair_conditioner_phrase_still_signals_beauty():
+    result = pq.evaluate_product_quality(
+        _product(title="Moisturizing Hair Conditioner 500ml", categories_text="Beauty & Personal Care | Hair Care")
+    )
+    assert MISMATCH_FLAG not in result["quality_flags"]
+    assert result["title_category_consistency"] >= 0.7
+
+
+# ---------------------------------------------------------------------------
 # Eksik / bozuk veri
 # ---------------------------------------------------------------------------
 
