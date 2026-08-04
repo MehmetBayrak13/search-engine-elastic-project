@@ -80,6 +80,19 @@
       "source_category"
     ]
   },
+  "quality_ranking": {
+    "enabled": false,
+    "score_field": "data_quality_score",
+    "consistency_field": "title_category_consistency",
+    "boost": 3,
+    "consistency_boost": 4,
+    "low_consistency_threshold": 0.3,
+    "low_consistency_penalty": 0.5,
+    "bypass_for_exact_asin": true,
+    "missing_value_behavior": "neutral",
+    "discovery_filter_enabled": false,
+    "discovery_min_data_quality_score": 0.3
+  },
   "source_fields": {
     "search": [
       "parent_asin", "title", "main_category", "categories", "source_category",

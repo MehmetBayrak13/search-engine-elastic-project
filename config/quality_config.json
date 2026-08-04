@@ -1,0 +1,57 @@
+{
+  "quality_version": "v1",
+  "include_debug_explanation": false,
+  "consistency_scoring": {
+    "phrase_match_weight": 2.0,
+    "token_match_weight": 1.0,
+    "min_family_signal": 1.0,
+    "dominance_margin_ratio": 0.2,
+    "family_match_score": 0.95,
+    "insufficient_signal_score": 0.55,
+    "cross_family_soft_score": 0.5,
+    "conflict_score": 0.15,
+    "overlap_blend_weight": 0.25
+  },
+  "title_analysis": {
+    "min_meaningful_tokens": 1,
+    "code_like_min_length": 4
+  },
+  "weights": {
+    "data_quality": {
+      "consistency": 0.45,
+      "completeness": 0.35,
+      "validity": 0.20
+    }
+  },
+  "completeness_signals": {
+    "has_title": 0.15,
+    "has_categories": 0.15,
+    "has_description_or_features": 0.25,
+    "has_image": 0.15,
+    "has_asin": 0.15,
+    "not_generic_title": 0.15
+  },
+  "validity_signals": {
+    "rating_valid_or_absent": 0.4,
+    "rating_number_valid_or_absent": 0.2,
+    "price_valid_or_absent": 0.4
+  },
+  "stopwords": [
+    "for", "with", "and", "the", "a", "an", "of", "to", "in", "on",
+    "by", "at", "from", "is", "are", "this", "that", "your", "our"
+  ],
+  "flags": {
+    "mismatch": "title_category_mismatch",
+    "missing_title": "missing_title",
+    "missing_categories": "missing_categories",
+    "missing_title_and_categories": "missing_title_and_categories",
+    "generic_title": "generic_title",
+    "missing_description_and_features": "missing_description_and_features",
+    "missing_image": "missing_image",
+    "missing_asin": "missing_asin",
+    "invalid_rating": "invalid_rating",
+    "invalid_rating_number": "invalid_rating_number",
+    "invalid_price": "invalid_price",
+    "evaluation_failed": "quality_evaluation_failed"
+  }
+}

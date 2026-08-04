@@ -425,6 +425,23 @@ def build_category_discovery_query(
 
     query = {"bool": {"should": should, "minimum_should_match": 1}} if should else {"match_all": {}}
 
+    # Kategori keşfi, lexical olarak eşleşen ama düşük veri kaliteli
+    # belgelerden (ör. title-category mismatch) yanlış kategori adayı
+    # öğrenebilir (bkz. CLAUDE.md §8). `quality_ranking.discovery_filter_enabled`
+    # açıkken bu belgeler aggregation örnekleminden dışlanır. Eski
+    # index'lerde data_quality_score alanı yoksa bu range sorgusu hiçbir
+    # belgeyle eşleşmez → must_not altında hiçbir şeyi dışlamaz (no-op);
+    # bu yüzden reindex tamamlanana kadar flag açık bırakılsa bile davranış
+    # bozulmaz. Yine de ilk migration öncesinde flag KAPALI tutulur (varsayılan).
+    qr = CONFIG.quality_ranking
+    if qr.discovery_filter_enabled:
+        query = {
+            "bool": {
+                "must": [query],
+                "must_not": [{"range": {qr.score_field: {"lt": qr.discovery_min_data_quality_score}}}],
+            }
+        }
+
     return {
         "size": 0,
         "track_total_hits": False,
@@ -629,6 +646,102 @@ def build_autocomplete_query(
 
 
 # ---------------------------------------------------------------------------
+# Ürün veri kalitesi (product_quality.py) sinyalleri — yalnızca reranking
+# ---------------------------------------------------------------------------
+# `quality_ranking.enabled=false` iken (varsayılan — mevcut production
+# index'lerinde title_category_consistency/data_quality_score alanları henüz
+# YOK) bu bölüm hiçbir şeyi değiştirmez. Etkinleştirildiğinde bile lexical
+# zorunlu eşleşme (bool.must) asla değişmez: kalite sinyalleri yalnızca zaten
+# eşleşmiş belgelerin _score'unu function_score ile çarpar, tek başına belge
+# döndürmez. script_score KULLANILMAZ — yalnızca field_value_factor (boost) ve
+# filter+weight (eşik altı penalty) fonksiyonları; performans için tercih
+# edilir (bkz. elasticsearch/product_quality_production_migration.md).
+def _build_quality_functions(qr, bypass_must_not: list[dict] | None) -> list[dict]:
+    """quality_ranking config'inden function_score `functions` listesini üretir.
+
+    `missing_value_behavior`:
+      - "neutral": alan mevcut olmayan (eski) belgeler için field_value_factor'a
+        `missing = 1/factor` verilir → çarpan tam olarak 1.0 olur (ne boost ne
+        penalty). Tüm belgelere aynı fonksiyon uygulanır.
+      - "skip": fonksiyon yalnızca alan `exists` olduğunda çalışır; alan yoksa
+        fonksiyon hiç değerlendirilmez (score_mode=multiply altında etkisi
+        yine nötr 1.0'dır) — matematiksel sonuç aynıdır, farkla alanın
+        varlığı ES `exists` filtresiyle açıkça kontrol edilir.
+
+    `bypass_must_not` doluysa (exact ASIN sorgusu + bypass_for_exact_asin),
+    tüm fonksiyonlara aynı "bu belge exact-ASIN eşleşmesiyse uygulama"
+    filtresi eklenir.
+    """
+
+    def _wrap_filter(extra_filter: dict | None) -> dict | None:
+        if not bypass_must_not:
+            return extra_filter
+        bool_body: dict = {"must_not": bypass_must_not}
+        if extra_filter is not None:
+            bool_body["must"] = [extra_filter]
+        return {"bool": bool_body}
+
+    functions: list[dict] = []
+
+    for field, factor in ((qr.score_field, qr.boost), (qr.consistency_field, qr.consistency_boost)):
+        function: dict = {"field_value_factor": {"field": field, "factor": factor, "modifier": "none"}}
+        if qr.missing_value_behavior == "skip":
+            filt = _wrap_filter({"exists": {"field": field}})
+        else:
+            function["field_value_factor"]["missing"] = round(1.0 / factor, 6)
+            filt = _wrap_filter(None)
+        if filt is not None:
+            function["filter"] = filt
+        functions.append(function)
+
+    penalty_filter = _wrap_filter({
+        "bool": {
+            "must": [
+                {"exists": {"field": qr.consistency_field}},
+                {"range": {qr.consistency_field: {"lt": qr.low_consistency_threshold}}},
+            ]
+        }
+    })
+    functions.append({"filter": penalty_filter, "weight": qr.low_consistency_penalty})
+
+    return functions
+
+
+def _apply_quality_ranking(base_query: dict, *, query_text: str, enable_exact_asin: bool) -> dict:
+    """`base_query` (`{"bool": ...}`) üzerine, açıksa, kalite sinyali
+    function_score'unu bindirir. `enable_exact_asin` VE
+    `quality_ranking.bypass_for_exact_asin` ikisi de doğruysa, tam bu sorgu
+    metniyle eşleşen exact ASIN belgeleri kalite boost/penalty'sinden muaf
+    tutulur — kullanıcı doğrudan ürün kodu aradığında kayıt her zaman
+    bulunabilir olmalı, kalite sinyali bunu bastıramaz."""
+    qr = CONFIG.quality_ranking
+    if not qr.enabled:
+        return base_query
+
+    bypass_must_not = None
+    if qr.bypass_for_exact_asin and enable_exact_asin:
+        bypass_must_not = [{
+            "term": {
+                CONFIG.search_methods.exact_asin.field: {
+                    "value": query_text,
+                    "case_insensitive": True,
+                }
+            }
+        }]
+
+    functions = _build_quality_functions(qr, bypass_must_not)
+
+    return {
+        "function_score": {
+            "query": base_query,
+            "functions": functions,
+            "score_mode": "multiply",
+            "boost_mode": "multiply",
+        }
+    }
+
+
+# ---------------------------------------------------------------------------
 # Sorgu oluşturma (normal arama)
 # ---------------------------------------------------------------------------
 def build_search_query(
@@ -770,11 +883,15 @@ def build_search_query(
     if intent_exclusions:
         bool_query["must_not"] = intent_exclusions
 
+    final_query = _apply_quality_ranking(
+        {"bool": bool_query}, query_text=query_text, enable_exact_asin=enable_exact_asin
+    )
+
     return {
         "size": result_size,
         "track_total_hits": track_total_hits,
         "_source": SOURCE_FIELDS,
-        "query": {"bool": bool_query},
+        "query": final_query,
     }
 
 

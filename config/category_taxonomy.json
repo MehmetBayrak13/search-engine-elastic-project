@@ -1,0 +1,229 @@
+{
+  "_comment": "Genel ürün-aile taksonomisi. Tek tek ürün/sorgu için değil, geniş kategori aileleri için tanımlanır. product_quality.py bunu title <-> category tutarlılığı hesaplamak için kullanır. Yeni bir ürün türü eklemek için buraya terim eklemek yeterlidir; kod değişikliği gerekmez.",
+  "families": {
+    "electronics_computers": {
+      "label": "Electronics & Computers",
+      "title_terms": [
+        "laptop", "notebook computer", "computer", "desktop pc", "pc",
+        "gaming mouse", "wireless mouse", "bluetooth mouse", "computer mouse",
+        "optical mouse", "mouse pad", "keyboard", "gaming keyboard", "monitor",
+        "graphics card", "gpu", "cpu", "processor", "motherboard",
+        "router", "modem", "webcam", "headphone", "headphones", "earbud",
+        "earbuds", "bluetooth speaker", "smartphone", "cell phone", "tablet",
+        "phone charger", "usb cable", "hdmi cable", "ssd", "hard drive",
+        "memory card", "printer", "scanner", "digital camera", "camera lens",
+        "drone", "smartwatch", "smart watch", "wearable technology",
+        "fitness tracker", "microphone", "projector", "power bank",
+        "video game console", "graphics tablet", "camera"
+      ],
+      "category_terms": [
+        "electronics", "computers", "computers & accessories",
+        "computer accessories", "laptops", "cell phones",
+        "cell phones & accessories", "camera & photo", "video games",
+        "office electronics", "wearable technology", "car electronics",
+        "accessories & supplies"
+      ],
+      "aliases": {
+        "notebooks": "laptop",
+        "headset": "headphones"
+      },
+      "conflicting_families": [
+        "beauty_personal_care", "grocery", "clothing_fashion", "books_media"
+      ]
+    },
+    "beauty_personal_care": {
+      "label": "Beauty & Personal Care",
+      "title_terms": [
+        "makeup", "make-up", "cosmetic", "cosmetics", "lipstick", "mascara",
+        "foundation cream", "concealer", "eyeshadow", "blush", "skincare",
+        "skin care", "moisturizer", "face serum", "cleanser", "shampoo",
+        "conditioner", "perfume", "fragrance spray", "nail polish",
+        "makeup brush", "beauty blender", "hair dryer", "curling iron",
+        "hair straightener", "razor", "shaving cream", "body lotion",
+        "sunscreen", "eyeliner", "lip gloss", "facial mask"
+      ],
+      "category_terms": [
+        "beauty", "beauty & personal care", "makeup", "skin care",
+        "hair care", "personal care", "fragrance", "tools & accessories",
+        "bath & body"
+      ],
+      "aliases": {
+        "make up": "makeup"
+      },
+      "conflicting_families": [
+        "electronics_computers", "automotive", "tools_home_improvement",
+        "grocery", "office_products", "sports_outdoors"
+      ]
+    },
+    "books_media": {
+      "label": "Books & Media",
+      "title_terms": [
+        "book", "novel", "paperback", "hardcover", "textbook", "ebook",
+        "audiobook", "dvd", "blu-ray", "vinyl record", "comic book",
+        "graphic novel", "magazine subscription"
+      ],
+      "category_terms": [
+        "books", "kindle store", "movies & tv", "cds & vinyl",
+        "audible audiobooks", "comics & graphic novels"
+      ],
+      "aliases": {
+        "books": "book",
+        "novels": "novel"
+      },
+      "conflicting_families": [
+        "beauty_personal_care", "automotive", "grocery",
+        "tools_home_improvement", "clothing_fashion", "pet_supplies"
+      ]
+    },
+    "automotive": {
+      "label": "Automotive",
+      "title_terms": [
+        "car", "car tire", "truck tire", "vehicle", "brake pad", "engine oil",
+        "motor oil", "spark plug", "car seat cover", "dash cam", "dashcam",
+        "windshield wiper", "car charger", "car phone mount",
+        "license plate frame", "alloy wheel", "exhaust pipe", "radiator",
+        "car air freshener", "car battery", "car floor mat"
+      ],
+      "category_terms": [
+        "automotive", "car & motorbike", "tires & wheels",
+        "exterior accessories", "interior accessories", "replacement parts"
+      ],
+      "aliases": {},
+      "conflicting_families": [
+        "beauty_personal_care", "books_media", "grocery", "toys_games"
+      ]
+    },
+    "home_kitchen": {
+      "label": "Home & Kitchen",
+      "title_terms": [
+        "kitchen knife", "cookware set", "frying pan", "cooking pot",
+        "blender", "toaster", "microwave oven", "refrigerator",
+        "vacuum cleaner", "sofa", "mattress", "bedding set", "curtain",
+        "table lamp", "ceiling light", "light bulb", "storage bin",
+        "cleaning supplies", "dinnerware set", "cutlery set", "kitchen utensil"
+      ],
+      "category_terms": [
+        "home & kitchen", "kitchen & dining", "furniture", "bedding",
+        "home décor", "home decor", "lighting & ceiling fans", "lighting",
+        "vacuums & floor care", "storage & organization", "home appliances",
+        "appliances"
+      ],
+      "aliases": {},
+      "conflicting_families": ["automotive"]
+    },
+    "clothing_fashion": {
+      "label": "Clothing & Fashion",
+      "title_terms": [
+        "t-shirt", "dress shirt", "jeans", "jacket", "coat", "sneakers",
+        "ankle boots", "sandals", "handbag", "purse", "wallet", "leather belt",
+        "baseball cap", "socks", "underwear", "swimsuit", "sunglasses",
+        "necklace", "earrings", "bracelet"
+      ],
+      "category_terms": [
+        "clothing", "clothing, shoes & jewelry", "shoes", "jewelry",
+        "luggage & travel gear", "fashion"
+      ],
+      "aliases": {},
+      "conflicting_families": ["automotive", "grocery", "tools_home_improvement"]
+    },
+    "toys_games": {
+      "label": "Toys & Games",
+      "title_terms": [
+        "toy", "action figure", "doll", "jigsaw puzzle", "board game",
+        "building blocks", "rc car", "remote control car", "stuffed animal",
+        "plush toy", "play set", "video game", "gaming chair",
+        "game controller"
+      ],
+      "category_terms": [
+        "toys & games", "video games", "games", "hobbies", "puzzles"
+      ],
+      "aliases": {
+        "toys": "toy"
+      },
+      "conflicting_families": ["beauty_personal_care", "grocery", "office_products"]
+    },
+    "pet_supplies": {
+      "label": "Pet Supplies",
+      "title_terms": [
+        "dog food", "cat food", "pet bed", "dog leash", "pet collar",
+        "aquarium", "fish tank", "bird cage", "cat litter box",
+        "pet carrier", "dog toy", "cat toy", "pet grooming kit",
+        "pet hair vacuum"
+      ],
+      "category_terms": [
+        "pet supplies", "dog supplies", "cat supplies",
+        "fish & aquatic pets", "birds", "small animals"
+      ],
+      "aliases": {},
+      "conflicting_families": ["office_products", "books_media", "beauty_personal_care"]
+    },
+    "grocery": {
+      "label": "Grocery",
+      "title_terms": [
+        "snack pack", "coffee beans", "ground coffee", "tea bags", "cereal",
+        "pasta", "cooking sauce", "spice blend", "seasoning", "chocolate bar",
+        "candy", "fruit juice", "cooking oil", "flour", "sugar",
+        "organic food"
+      ],
+      "category_terms": [
+        "grocery", "grocery & gourmet food", "beverages", "snack foods",
+        "breakfast foods", "pantry staples"
+      ],
+      "aliases": {},
+      "conflicting_families": ["electronics_computers", "automotive", "office_products", "toys_games"]
+    },
+    "sports_outdoors": {
+      "label": "Sports & Outdoors",
+      "title_terms": [
+        "yoga mat", "dumbbell", "treadmill", "bicycle", "mountain bike",
+        "camping tent", "sleeping bag", "fishing rod", "golf club",
+        "hiking backpack", "running shoes", "exercise equipment",
+        "weight bench", "resistance band"
+      ],
+      "category_terms": [
+        "sports & outdoors", "exercise & fitness", "outdoor recreation",
+        "camping & hiking", "cycling", "team sports"
+      ],
+      "aliases": {},
+      "conflicting_families": ["beauty_personal_care", "grocery", "books_media"]
+    },
+    "tools_home_improvement": {
+      "label": "Tools & Home Improvement",
+      "title_terms": [
+        "power drill", "screwdriver set", "wrench", "hammer", "circular saw",
+        "tool set", "power tool", "paint roller", "light switch",
+        "electrical wire", "plumbing fixture", "kitchen faucet",
+        "door lock", "air filter", "garden hose", "lawn mower"
+      ],
+      "category_terms": [
+        "tools & home improvement", "power & hand tools", "building supplies",
+        "electrical", "plumbing", "hardware"
+      ],
+      "aliases": {},
+      "conflicting_families": ["beauty_personal_care", "books_media", "clothing_fashion"]
+    },
+    "office_products": {
+      "label": "Office Products",
+      "title_terms": [
+        "ballpoint pen", "pencil set", "notebook paper", "stapler",
+        "printer paper", "ring binder", "desk organizer", "office chair",
+        "whiteboard", "sticky notes", "envelope", "calculator",
+        "label maker"
+      ],
+      "category_terms": [
+        "office products", "office & school supplies", "desk accessories"
+      ],
+      "aliases": {},
+      "conflicting_families": ["pet_supplies", "grocery", "toys_games"]
+    }
+  },
+  "generic_terms": [
+    "black", "white", "blue", "red", "green", "yellow", "pink", "purple",
+    "gray", "grey", "silver", "gold", "new", "set", "pack", "for", "with",
+    "and", "the", "a", "an", "of", "large", "small", "medium", "mini",
+    "pro", "plus", "kit", "piece", "pieces", "pcs", "replacement",
+    "universal", "portable", "professional", "premium", "best",
+    "high quality", "watch", "watches", "case", "cover", "holder", "band",
+    "light", "filter", "brush", "cleaner", "vacuum", "chair"
+  ]
+}

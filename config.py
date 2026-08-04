@@ -209,6 +209,27 @@ class DynamicIntentConfig:
 
 
 @dataclass(frozen=True)
+class QualityRankingConfig:
+    """Ürün veri kalitesi (`product_quality.py`) sinyallerinin arama sırasına
+    nasıl bağlanacağını kontrol eder. `enabled=false` iken (varsayılan —
+    production index'lerinde henüz kalite alanları yok) query-building hiçbir
+    şey değiştirmez; alanlar mevcut olmayan eski belgelerde de sorgu asla
+    bozulmaz (bkz. app.py: `_build_quality_ranking_functions`)."""
+
+    enabled: bool
+    score_field: str
+    consistency_field: str
+    boost: float
+    consistency_boost: float
+    low_consistency_threshold: float
+    low_consistency_penalty: float
+    bypass_for_exact_asin: bool
+    missing_value_behavior: str
+    discovery_filter_enabled: bool
+    discovery_min_data_quality_score: float
+
+
+@dataclass(frozen=True)
 class SourceFieldsConfig:
     search: tuple[str, ...]
     suggestions: tuple[str, ...]
@@ -248,6 +269,7 @@ class AppConfig:
     search_methods: SearchMethodsConfig
     translation: TranslationConfig
     dynamic_intent: DynamicIntentConfig
+    quality_ranking: QualityRankingConfig
     source_fields: SourceFieldsConfig
     ui: UIConfig
     product_url_template: str
@@ -323,6 +345,54 @@ def _build_dynamic_intent(raw: Any, context: str) -> DynamicIntentConfig:
         timeout_seconds=_require_positive_int(raw.get("timeout_seconds"), f"{context}.timeout_seconds"),
         search_fields=_build_field_boosts(raw.get("search_fields"), f"{context}.search_fields"),
         aggregation_fields=aggregation_fields,
+    )
+
+
+_VALID_MISSING_VALUE_BEHAVIORS = ("neutral", "skip")
+
+
+def _build_quality_ranking(raw: Any, context: str) -> QualityRankingConfig:
+    raw = _require_dict(raw, context)
+
+    missing_value_behavior = _require_str(
+        raw.get("missing_value_behavior"), f"{context}.missing_value_behavior"
+    )
+    if missing_value_behavior not in _VALID_MISSING_VALUE_BEHAVIORS:
+        raise ConfigError(
+            f"{context}.missing_value_behavior {_VALID_MISSING_VALUE_BEHAVIORS} içinden biri olmalı, "
+            f"alınan: {missing_value_behavior!r}"
+        )
+
+    low_consistency_threshold = _require_positive_number(
+        raw.get("low_consistency_threshold"), f"{context}.low_consistency_threshold"
+    )
+    if low_consistency_threshold > 1:
+        raise ConfigError(f"{context}.low_consistency_threshold 0-1 aralığında olmalı.")
+
+    discovery_min_data_quality_score = _require_positive_number(
+        raw.get("discovery_min_data_quality_score"), f"{context}.discovery_min_data_quality_score"
+    )
+    if discovery_min_data_quality_score > 1:
+        raise ConfigError(f"{context}.discovery_min_data_quality_score 0-1 aralığında olmalı.")
+
+    return QualityRankingConfig(
+        enabled=_require_bool(raw.get("enabled"), f"{context}.enabled"),
+        score_field=_require_str(raw.get("score_field"), f"{context}.score_field"),
+        consistency_field=_require_str(raw.get("consistency_field"), f"{context}.consistency_field"),
+        boost=_require_positive_number(raw.get("boost"), f"{context}.boost"),
+        consistency_boost=_require_positive_number(raw.get("consistency_boost"), f"{context}.consistency_boost"),
+        low_consistency_threshold=low_consistency_threshold,
+        low_consistency_penalty=_require_positive_number(
+            raw.get("low_consistency_penalty"), f"{context}.low_consistency_penalty"
+        ),
+        bypass_for_exact_asin=_require_bool(
+            raw.get("bypass_for_exact_asin"), f"{context}.bypass_for_exact_asin"
+        ),
+        missing_value_behavior=missing_value_behavior,
+        discovery_filter_enabled=_require_bool(
+            raw.get("discovery_filter_enabled"), f"{context}.discovery_filter_enabled"
+        ),
+        discovery_min_data_quality_score=discovery_min_data_quality_score,
     )
 
 
@@ -435,6 +505,7 @@ def load_search_config(path: Path = SEARCH_CONFIG_PATH) -> AppConfig:
     )
 
     dynamic_intent = _build_dynamic_intent(raw.get("dynamic_intent"), "dynamic_intent")
+    quality_ranking = _build_quality_ranking(raw.get("quality_ranking"), "quality_ranking")
 
     source_fields_raw = _require_dict(raw.get("source_fields"), "source_fields")
     source_fields = SourceFieldsConfig(
@@ -467,6 +538,7 @@ def load_search_config(path: Path = SEARCH_CONFIG_PATH) -> AppConfig:
         search_methods=search_methods,
         translation=translation,
         dynamic_intent=dynamic_intent,
+        quality_ranking=quality_ranking,
         source_fields=source_fields,
         ui=ui,
         product_url_template=product_url_template,

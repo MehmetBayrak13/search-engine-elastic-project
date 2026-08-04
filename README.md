@@ -50,6 +50,8 @@ Arama davranışının tamamı `config/` altındaki JSON dosyalarından okunur �
 | `config/search_config.json` | Index adları, timeout/limit değerleri, exact ASIN / phrase / multi-match / fuzzy / autocomplete alan ve boost ayarları, çeviri ayarları, **dinamik kategori keşfi (`dynamic_intent`) ayarları**, dönen kaynak alanlar, arayüz metinleri |
 | `config/intent_rules.json` | **Opsiyonel override katmanı** (örn. `watch`): alias/tetikleyici terimler, dışlama koşulları, force-boost terimleri, negatif kategoriler (exclusion), rozet metni/ikonu, `priority`. Boş `{}` da geçerlidir — hiç kural olmadan da çalışır; ana kategori-intent motoru bu dosya DEĞİL, dinamik kategori keşfidir (aşağıya bakın). |
 | `config/query_translations.json` | Türkçe ifade/kelime → İngilizce karşılık sözlüğü. Boş `{}` da geçerlidir — çeviri sözlüğü olmadan uygulama, sorguyu değiştirmeden aramaya devam eder. |
+| `config/category_taxonomy.json` | `product_quality.py`nin kullandığı genel ürün-ailesi taksonomisi (12 aile: electronics, beauty, books, automotive, home&kitchen, clothing, toys, pet, grocery, sports, tools, office) — title/category terimleri, aliaslar, `conflicting_families`. |
+| `config/quality_config.json` | `product_quality.py` skorlama ağırlıkları/eşikleri, stopword listesi, flag isimleri. |
 
 `config.py`, bu dosyaları okuyup doğrulayan (negatif limit, boş alan listesi,
 geçersiz boost, bozuk çeviri/intent yapısı gibi durumları `ConfigError` ile
@@ -106,6 +108,65 @@ asla bypass etmez, tek başına ürün döndürmez.
 - `intent_rules.json` tamamen `{}` olsa bile dinamik kategori keşfi normal
   şekilde çalışmaya devam eder (bkz. `tests/test_dynamic_category_discovery.py`).
 
+## Ürün veri kalitesi / title-category tutarlılığı (`product_quality.py`)
+
+`product_quality.py`, tek tek ürün türüne özel intent kuralı yazmadan,
+başlık ile kategori arasındaki tutarsızlıkları (ör. başlık "Gaming Mouse
+Black" ama kategori "Beauty & Personal Care / Makeup Brushes") genel bir
+kategori-ailesi taksonomisiyle (`config/category_taxonomy.json`, 12 ürün
+ailesi) tespit eder. Elasticsearch'e bağlanmaz — saf, deterministik,
+`evaluate_product_quality(product: dict) -> dict` fonksiyonu:
+
+```json
+{
+  "title_category_consistency": 0.0-1.0,
+  "data_quality_score": 0.0-1.0,
+  "quality_flags": ["title_category_mismatch", "..."],
+  "quality_version": "v1"
+}
+```
+
+Algoritma: başlık ve kategori metinleri taksonomideki ailelere karşı
+puanlanır (phrase eşleşmesi token eşleşmesinden ağır sayılır, jenerik
+terimler puan katmaz); bir taraf için "baskın aile" yalnızca yeterli sinyal
+VE ikinci adaya karşı yeterli marj varsa belirlenir — bu, tek kelimelik
+belirsiz sinyallerden (ör. bağlamsız "watch", "light", "chair") yanlış
+pozitif üretilmesini engeller. Aileler farklı VE
+`config/category_taxonomy.json`daki `conflicting_families` listesinde
+birbirine karşıtsa `title_category_mismatch` flag'i eklenir; farklı ama
+karşıt tanımlı değilse (ör. "book light", "pet hair vacuum" gibi meşru
+çok-alanlı ürünler) tamamen eleme değil, skor düşürme uygulanır. Ağırlıklar
+ve eşikler `config/quality_config.json`dan gelir.
+
+- **Importer entegrasyonu**: `full_amazon_importer.py` ve `index_amazon.py`,
+  her belge bulk-index edilmeden önce `evaluate_product_quality`yi çağırır
+  (`apply_quality_evaluation`). Hata durumunda importu durdurmaz; güvenli
+  fallback (`data_quality_score=0.5`, flag `quality_evaluation_failed`)
+  uygulanır ve hata loglanır. Checkpoint/resume davranışı değişmedi.
+- **Arama entegrasyonu**: `app.py`, `config/search_config.json:quality_ranking`
+  (varsayılan `enabled:false` — production index'lerinde henüz kalite
+  alanı yok) açıkken normal arama sorgusunu bir `function_score` ile
+  sarmalar (`field_value_factor` boost + eşik-altı `filter`+`weight`
+  penalty; `script_score` KULLANILMAZ). Lexical zorunlu eşleşme
+  (`bool.must`) hiç değişmez — kalite yalnızca zaten eşleşmiş belgeleri
+  yeniden sıralar. Exact ASIN sorgusu (`bypass_for_exact_asin`) kalite
+  boost/penalty'sinden muaftır. Kalite alanı olmayan eski belgeler sorguyu
+  bozmaz (`missing_value_behavior`). Autocomplete etkilenmez.
+- **Dinamik kategori keşfi koruması**: `quality_ranking.discovery_filter_enabled`
+  (varsayılan `false`) açıldığında, `build_category_discovery_query`
+  düşük `data_quality_score`'lu belgeleri aggregation örnekleminden
+  dışlar — böylece keşif, bozuk title-category eşleşmelerinden yanlış
+  kategori öğrenmez. Eski index'lerde alan yoksa bu filtre no-op'tur.
+- **Offline değerlendirme**: `evaluate_quality_sample.py`, Elasticsearch'ten
+  read-only örnek çekip CSV/JSONL kalite raporu üretir (hiçbir belgeyi
+  güncellemez).
+- **Production migration planı**: `elasticsearch/product_quality_production_migration.md`
+  — mevcut ~5.9M belgeye kalite alanlarını eklemek için gereken reindex/
+  backfill stratejisini, yeni mapping tasarımını (neden `rank_feature`
+  değil `float` seçildiğini) ve aşama aşama onay noktalarını içerir. Bu
+  görevde yalnızca read-only `_mapping`/`_settings`/`_count`/`_stats`
+  sorguları çalıştırıldı; hiçbir yazma/reindex işlemi yapılmadı.
+
 ## Mimari
 
 - **`app.py`** — Streamlit arayüzü, sorgu üretimi (`build_search_query`,
@@ -125,13 +186,22 @@ asla bypass etmez, tek başına ürün döndürmez.
   çağrısını içeren orkestrasyon `search_products` içindedir. Bu ayrım,
   `build_search_query`'nin testlerde canlı cluster'a istek atmadan doğrudan
   çağrılabilmesini sağlar.
-- **`config.py`** — config dosyalarının yükleme/doğrulama katmanı.
+- **`config.py`** — config dosyalarının yükleme/doğrulama katmanı
+  (`quality_ranking` dahil).
+- **`product_quality.py`** — ürün veri kalitesi / title-category tutarlılığı
+  değerlendirmesi (bkz. yukarıdaki bölüm). Elasticsearch'e bağlanmaz.
 - **`full_amazon_importer.py`** — Hugging Face'teki `McAuley-Lab/Amazon-Reviews-2023`
-  veri setinin tamamını, checkpoint'li ve devam ettirilebilir şekilde
+  veri setinin tamamını, checkpoint'li ve devam ettirilebilir şekilde,
+  her belge için `product_quality.evaluate_product_quality` çalıştırarak
   Elasticsearch'e (`amazon-products` alias'ı) indexler.
-- **`index_amazon.py`** — kategori başına 10 ürünlük eski/basit örnek importer.
+- **`index_amazon.py`** — kategori başına 10 ürünlük eski/basit örnek importer
+  (aynı `product_quality` modülünü kullanır, kod kopyalamaz).
 - **`inspect_amazon.py`** — Elasticsearch'e bağlanmadan, ham Hugging Face
-  kayıtlarının alan yapısını incelemek için debug scripti.
+  kayıtlarının alan yapısını incelemek için debug scripti; `--quality`
+  bayrağıyla örnek kayıtların kalite değerlendirmesini de yazdırır.
+- **`evaluate_quality_sample.py`** — Elasticsearch'ten read-only örnek çekip
+  kalite raporu (CSV/JSONL) üreten offline analiz aracı; hiçbir belgeyi
+  güncellemez.
 
 Index mapping/analyzer tanımları (Edge NGram, Türkçe analyzer vb.) bu depoda
 değil, doğrudan Elastic Cloud cluster'ında (Kibana Dev Tools üzerinden)

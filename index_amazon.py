@@ -9,6 +9,8 @@ from datasets import load_dataset
 from elasticsearch import Elasticsearch, helpers
 from huggingface_hub import HfApi
 
+from product_quality import QUALITY_VERSION, evaluate_product_quality
+
 
 INDEX_NAME = "amazon-products-v1"
 PRODUCTS_PER_CATEGORY = 10
@@ -204,6 +206,32 @@ def transform_product(
     }
 
 
+def apply_quality_evaluation(document: dict[str, Any], category: str) -> dict[str, Any]:
+    """
+    `product_quality.evaluate_product_quality`yi (full_amazon_importer.py ile
+    AYNI modül, kod kopyalanmadan) belgeye uygular. `evaluate_product_quality`
+    kendi içinde zaten hata yutar; buradaki try/except yalnızca product_quality
+    modülüyle ilgili beklenmedik bir sorunda bu basit örnek importer'ı
+    durdurmamak içindir.
+    """
+    try:
+        quality = evaluate_product_quality(document)
+    except Exception as error:
+        print(
+            f"UYARI: {category} | {document.get('parent_asin')} için kalite "
+            f"değerlendirmesi başarısız oldu: {error}"
+        )
+        quality = {
+            "title_category_consistency": 0.5,
+            "data_quality_score": 0.5,
+            "quality_flags": ["quality_evaluation_failed"],
+            "quality_version": QUALITY_VERSION,
+        }
+
+    document.update(quality)
+    return document
+
+
 def load_category_dataset(
     file_url: str,
     file_format: str,
@@ -240,6 +268,8 @@ def generate_category_actions(
 
         if document is None:
             continue
+
+        document = apply_quality_evaluation(document, category)
 
         yield {
             "_op_type": "index",

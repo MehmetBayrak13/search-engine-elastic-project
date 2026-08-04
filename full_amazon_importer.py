@@ -13,6 +13,8 @@ from datasets import load_dataset
 from elasticsearch import Elasticsearch, helpers
 from huggingface_hub import HfApi
 
+from product_quality import QUALITY_VERSION, evaluate_product_quality
+
 
 # ============================================================
 # GENEL AYARLAR
@@ -448,6 +450,46 @@ def transform_product(
     }
 
 
+def apply_quality_evaluation(
+    document: dict[str, Any],
+    *,
+    category: str,
+    file_path: str,
+    row_number: int | None,
+) -> dict[str, Any]:
+    """
+    `product_quality.evaluate_product_quality`yi belgeye uygular ve
+    title_category_consistency / data_quality_score / quality_flags /
+    quality_version alanlarını belgeye ekler.
+
+    `evaluate_product_quality` kendi içinde zaten hiçbir zaman exception
+    fırlatmaz (bkz. product_quality.py — kendi hatasını sessizce fallback'e
+    çevirir). Buradaki try/except, product_quality modülünün kendisiyle
+    ilgili beklenmedik bir sorunda (ör. import/attribute hatası) importu
+    durdurmamak ve hatayı import_errors.jsonl'a LOGLAMAK içindir — pure
+    fonksiyonun kendisi I/O yapamaz.
+    """
+    try:
+        quality = evaluate_product_quality(document)
+    except Exception as error:
+        write_error(
+            category=category,
+            file_path=file_path,
+            row_number=row_number,
+            document_id=document.get("parent_asin"),
+            error=error,
+        )
+        quality = {
+            "title_category_consistency": 0.5,
+            "data_quality_score": 0.5,
+            "quality_flags": ["quality_evaluation_failed"],
+            "quality_version": QUALITY_VERSION,
+        }
+
+    document.update(quality)
+    return document
+
+
 # ============================================================
 # DATASET OKUMA
 # ============================================================
@@ -534,6 +576,13 @@ def iterate_file_documents(
 
         if document is None:
             continue
+
+        document = apply_quality_evaluation(
+            document,
+            category=category,
+            file_path=file_path,
+            row_number=row_number,
+        )
 
         yield row_number, document
 

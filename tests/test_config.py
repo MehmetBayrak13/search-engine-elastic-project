@@ -75,6 +75,19 @@ def _minimal_search_config(**overrides):
             "search_fields": {"title": 4, "categories_text": 6},
             "aggregation_fields": ["categories", "main_category"],
         },
+        "quality_ranking": {
+            "enabled": False,
+            "score_field": "data_quality_score",
+            "consistency_field": "title_category_consistency",
+            "boost": 3,
+            "consistency_boost": 4,
+            "low_consistency_threshold": 0.3,
+            "low_consistency_penalty": 0.5,
+            "bypass_for_exact_asin": True,
+            "missing_value_behavior": "neutral",
+            "discovery_filter_enabled": False,
+            "discovery_min_data_quality_score": 0.3,
+        },
         "source_fields": {
             "search": ["parent_asin", "title"],
             "suggestions": ["parent_asin", "title"],
@@ -181,6 +194,36 @@ def test_dynamic_intent_search_fields_come_from_config():
     app_config = load_search_config()
     assert app_config.dynamic_intent.es_search_fields
     assert all("^" in field for field in app_config.dynamic_intent.es_search_fields)
+
+
+def test_quality_ranking_invalid_missing_value_behavior_is_rejected(tmp_path):
+    data = _minimal_search_config()
+    data["quality_ranking"]["missing_value_behavior"] = "bogus"
+    path = _write_json(tmp_path / "search_config.json", data)
+    with pytest.raises(ConfigError):
+        load_search_config(path)
+
+
+def test_quality_ranking_threshold_out_of_range_is_rejected(tmp_path):
+    data = _minimal_search_config()
+    data["quality_ranking"]["low_consistency_threshold"] = 1.5
+    path = _write_json(tmp_path / "search_config.json", data)
+    with pytest.raises(ConfigError):
+        load_search_config(path)
+
+
+def test_quality_ranking_negative_boost_is_rejected(tmp_path):
+    data = _minimal_search_config()
+    data["quality_ranking"]["boost"] = -3
+    path = _write_json(tmp_path / "search_config.json", data)
+    with pytest.raises(ConfigError):
+        load_search_config(path)
+
+
+def test_quality_ranking_loads_from_default_repo_config():
+    app_config = load_search_config()
+    assert app_config.quality_ranking.enabled is False
+    assert app_config.quality_ranking.score_field == "data_quality_score"
 
 
 def test_empty_intent_rules_is_allowed(tmp_path):
