@@ -25,7 +25,6 @@ import re
 
 import requests
 import streamlit as st
-import streamlit.components.v1 as components
 
 from config import ConfigError, load_intent_rules, load_search_config, load_translations
 
@@ -955,7 +954,8 @@ def get_suggestions(query_text: str, max_items: int | None = None):
 
 
 # ---------------------------------------------------------------------------
-# Tıklanabilir kart (components.v1.html ile)
+# Tıklanabilir kart (st.iframe ile — onclick/onerror JS'i çalıştırmak için
+# iframe izolasyonu gerekiyor, st.html varsayılan olarak JS'i çalıştırmaz)
 # ---------------------------------------------------------------------------
 def render_product_card(hit: dict):
     """
@@ -1112,7 +1112,9 @@ def render_product_card(hit: dict):
 
     # Kart yüksekliği: 140px görsel + iç boşluk + (varsa) fiyat satırı + kart altı boşluk.
     card_height = 224 if price_html else 196
-    components.html(card_html, height=card_height, scrolling=False)
+    # st.iframe: kart onclick/onkeydown JS'i ve <script> bloğu içeriyor, bu yüzden
+    # st.html değil, JS çalıştırabilen iframe izolasyonu (st.iframe) kullanılıyor.
+    st.iframe(card_html, height=card_height, width="stretch")
 
 
 # ---------------------------------------------------------------------------
@@ -1200,7 +1202,10 @@ def render_suggestion_row(item: dict, idx: int) -> bool:
     card_html, height = _suggestion_visual_html(item)
     col_card, col_actions = st.columns([4, 1.15])
     with col_card:
-        components.html(card_html, height=height, scrolling=False)
+        # st.iframe: görsel yüklenemediğinde devreye giren onerror JS
+        # fallback'i çalıştırmak için gerekli (st.html varsayılan olarak JS'i
+        # çalıştırmaz, bu yüzden bozuk görsel durumunda yer tutucuya geçmez).
+        st.iframe(card_html, height=height, width="stretch")
     with col_actions:
         picked = st.button(
             CONFIG.ui.label("suggestion_pick_button", "🔎 Bu ürünü ara"),
