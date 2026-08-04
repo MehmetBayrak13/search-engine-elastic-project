@@ -226,6 +226,16 @@ def test_quality_ranking_loads_from_default_repo_config():
     assert app_config.quality_ranking.score_field == "data_quality_score"
 
 
+def test_app_config_has_quality_ranking_field():
+    # Regresyon: AppConfig.quality_ranking eksikse CONFIG.quality_ranking
+    # erişimi "'AppConfig' object has no attribute 'quality_ranking'" ile
+    # çöker (bkz. app.py: build_category_discovery_query).
+    app_config = load_search_config()
+    assert hasattr(app_config, "quality_ranking")
+    assert app_config.quality_ranking.enabled is False
+    assert app_config.quality_ranking.discovery_filter_enabled is False
+
+
 def test_empty_intent_rules_is_allowed(tmp_path):
     path = _write_json(tmp_path / "intent_rules.json", {})
     rules = load_intent_rules(path)

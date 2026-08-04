@@ -194,6 +194,21 @@ def test_discovery_query_is_size_zero_with_short_timeout():
     assert payload["timeout"] == f"{app.CONFIG.dynamic_intent.timeout_seconds}s"
 
 
+def test_build_category_discovery_query_does_not_raise_with_default_config():
+    # Regresyon: production'da CONFIG.quality_ranking eksik/uyumsuzken
+    # build_category_discovery_query AttributeError ile çöküyordu.
+    # Gerçek (mock'lanmamış) app.CONFIG ile çağrılır.
+    payload = app.build_category_discovery_query("toilet paper")
+    assert "query" in payload
+
+
+def test_app_imports_and_builds_normal_search_query():
+    assert app.CONFIG is not None
+    assert app.CONFIG.quality_ranking is not None
+    query = app.build_search_query("toilet paper")
+    assert "bool" in query["query"]
+
+
 def test_no_hardcoded_watch_check_in_app_py():
     source = app.__file__
     with open(source, "r", encoding="utf-8") as file:
