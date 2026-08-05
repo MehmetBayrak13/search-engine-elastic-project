@@ -99,6 +99,11 @@ def _minimal_search_config(**overrides):
             "suggestions": ["parent_asin", "title"],
         },
         "product_url_template": "https://www.amazon.com/dp/{asin}",
+        "autocomplete_ui": {
+            "panel_max_height_px": 360,
+            "row_height_px": 56,
+            "show_images": True,
+        },
         "ui": {
             "hero_logo": "🛍️",
             "hero_title": "title",
@@ -315,6 +320,35 @@ def test_app_config_has_pagination_field():
     app_config = load_search_config()
     assert hasattr(app_config, "pagination")
     assert app_config.pagination.page_size > 0
+
+
+def test_autocomplete_ui_loads_from_default_repo_config():
+    app_config = load_search_config()
+    assert app_config.autocomplete_ui.panel_max_height_px > 0
+    assert app_config.autocomplete_ui.row_height_px > 0
+    assert isinstance(app_config.autocomplete_ui.show_images, bool)
+
+
+def test_autocomplete_ui_missing_section_is_rejected(tmp_path):
+    data = _minimal_search_config()
+    del data["autocomplete_ui"]
+    path = _write_json(tmp_path / "search_config.json", data)
+    with pytest.raises(ConfigError):
+        load_search_config(path)
+
+
+def test_autocomplete_ui_negative_panel_height_is_rejected(tmp_path):
+    data = _minimal_search_config(**{"autocomplete_ui.panel_max_height_px": -10})
+    path = _write_json(tmp_path / "search_config.json", data)
+    with pytest.raises(ConfigError):
+        load_search_config(path)
+
+
+def test_autocomplete_ui_invalid_show_images_type_is_rejected(tmp_path):
+    data = _minimal_search_config(**{"autocomplete_ui.show_images": "yes"})
+    path = _write_json(tmp_path / "search_config.json", data)
+    with pytest.raises(ConfigError):
+        load_search_config(path)
 
 
 def test_empty_intent_rules_is_allowed(tmp_path):

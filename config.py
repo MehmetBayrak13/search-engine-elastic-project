@@ -264,6 +264,18 @@ class SourceFieldsConfig:
 
 
 @dataclass(frozen=True)
+class AutocompleteUIConfig:
+    """Chrome/Google-tarzı tek autocomplete dropdown panelinin görsel
+    ayarları (bkz. components/search_input). Öneri SAYISI burada değil,
+    `limits.autocomplete_display_size`'da kontrol edilir — bu bölüm yalnızca
+    panelin nasıl göründüğünü belirler."""
+
+    panel_max_height_px: int
+    row_height_px: int
+    show_images: bool
+
+
+@dataclass(frozen=True)
 class UIConfig:
     hero_logo: str
     hero_title: str
@@ -301,6 +313,7 @@ class AppConfig:
     pagination: PaginationConfig
     source_fields: SourceFieldsConfig
     ui: UIConfig
+    autocomplete_ui: AutocompleteUIConfig
     product_url_template: str
 
 
@@ -446,6 +459,17 @@ def _build_pagination(raw: Any, context: str) -> PaginationConfig:
     )
 
 
+def _build_autocomplete_ui(raw: Any, context: str) -> AutocompleteUIConfig:
+    raw = _require_dict(raw, context)
+    return AutocompleteUIConfig(
+        panel_max_height_px=_require_positive_int(
+            raw.get("panel_max_height_px"), f"{context}.panel_max_height_px"
+        ),
+        row_height_px=_require_positive_int(raw.get("row_height_px"), f"{context}.row_height_px"),
+        show_images=_require_bool(raw.get("show_images"), f"{context}.show_images"),
+    )
+
+
 def _build_fuzzy(raw: Any, context: str) -> MultiFieldQueryConfig:
     raw = _require_dict(raw, context)
     return MultiFieldQueryConfig(
@@ -579,6 +603,8 @@ def load_search_config(path: Path = SEARCH_CONFIG_PATH) -> AppConfig:
         messages=_require_dict(ui_raw.get("messages", {}), "ui.messages"),
     )
 
+    autocomplete_ui = _build_autocomplete_ui(raw.get("autocomplete_ui"), "autocomplete_ui")
+
     product_url_template = _require_str(raw.get("product_url_template"), "product_url_template")
     if "{asin}" not in product_url_template:
         raise ConfigError("product_url_template içinde '{asin}' yer tutucusu bulunmalı.")
@@ -593,6 +619,7 @@ def load_search_config(path: Path = SEARCH_CONFIG_PATH) -> AppConfig:
         pagination=pagination,
         source_fields=source_fields,
         ui=ui,
+        autocomplete_ui=autocomplete_ui,
         product_url_template=product_url_template,
     )
 

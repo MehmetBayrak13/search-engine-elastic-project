@@ -1,11 +1,21 @@
 """
 Sayfalama (`from + size`) testleri. Gerçek Elastic Cloud'a HİÇBİR istek
-atılmaz — `app._post_search` mock'lanır (bkz. `_mock_post_search`).
+atılmaz — `app.search_service._post_search` mock'lanır (bkz. `_mock_post_search`).
+
+NOT: sorgu oluşturma/çalıştırma mantığı `services/search_service.py` ve
+`services/autocomplete_service.py`ye taşındı (bkz. proje mimarisi). `build_search_query`,
+`search_products` gibi fonksiyonlar `app.py`de test/geri-uyum için hâlâ bare
+isim olarak (`app.build_search_query`) erişilebilir, ancak bunların
+`CONFIG`/`_post_search` gibi MUTABLE bağımlılıkları artık kendi tanımlandıkları
+modülde (`app.search_service`) yaşıyor — bu yüzden config override'ları ve
+`_post_search` mock'ları `app.CONFIG`/`app._post_search` DEĞİL,
+`app.search_service.CONFIG`/`app.search_service._post_search` üzerinde
+yapılmalı (aksi halde mutasyon fonksiyonların gerçekte okuduğu isme hiç
+ulaşmaz).
 """
 
 import dataclasses
 import inspect
-import json
 import re
 
 import pytest
@@ -14,27 +24,27 @@ import app
 
 
 def _with_pagination(**overrides):
-    """`app.CONFIG.pagination`ı geçici olarak override eden bir AppConfig döner."""
-    pagination = dataclasses.replace(app.CONFIG.pagination, **overrides)
-    return dataclasses.replace(app.CONFIG, pagination=pagination)
+    """`app.search_service.CONFIG.pagination`ı geçici olarak override eden bir AppConfig döner."""
+    pagination = dataclasses.replace(app.search_service.CONFIG.pagination, **overrides)
+    return dataclasses.replace(app.search_service.CONFIG, pagination=pagination)
 
 
 @pytest.fixture(autouse=True)
 def _restore_config():
-    original = app.CONFIG
+    original = app.search_service.CONFIG
     yield
-    app.CONFIG = original
+    app.search_service.CONFIG = original
 
 
 def _mock_post_search(monkeypatch, response=({"hits": {"hits": [], "total": {"value": 0}}}, None)):
-    """`app._post_search`ü mock'lar ve yapılan çağrıları kaydeder."""
+    """`app.search_service._post_search`ü mock'lar ve yapılan çağrıları kaydeder."""
     calls = []
 
     def fake_post_search(payload, timeout=20, index=None):
         calls.append({"payload": payload, "timeout": timeout, "index": index})
         return response
 
-    monkeypatch.setattr(app, "_post_search", fake_post_search)
+    monkeypatch.setattr(app.search_service, "_post_search", fake_post_search)
     return calls
 
 
@@ -53,17 +63,17 @@ def test_page_1_produces_from_0():
 
 def test_page_2_produces_from_page_size():
     payload = app.build_search_query("kamera", page=2, apply_intent_reranking=False)
-    assert payload["from"] == app.CONFIG.pagination.page_size
+    assert payload["from"] == app.search_service.CONFIG.pagination.page_size
 
 
 def test_page_3_produces_from_2x_page_size():
     payload = app.build_search_query("kamera", page=3, apply_intent_reranking=False)
-    assert payload["from"] == 2 * app.CONFIG.pagination.page_size
+    assert payload["from"] == 2 * app.search_service.CONFIG.pagination.page_size
 
 
 def test_size_comes_from_pagination_page_size():
     payload = app.build_search_query("kamera", page=1, apply_intent_reranking=False)
-    assert payload["size"] == app.CONFIG.pagination.page_size
+    assert payload["size"] == app.search_service.CONFIG.pagination.page_size
 
 
 def test_size_overrides_result_size_when_pagination_enabled():
@@ -72,7 +82,7 @@ def test_size_overrides_result_size_when_pagination_enabled():
     payload = app.build_search_query(
         "kamera", page=1, result_size=999, apply_intent_reranking=False
     )
-    assert payload["size"] == app.CONFIG.pagination.page_size
+    assert payload["size"] == app.search_service.CONFIG.pagination.page_size
     assert payload["size"] != 999
 
 
@@ -84,7 +94,7 @@ def test_page_below_one_normalizes_to_page_1():
 
 
 def test_pagination_disabled_omits_from_and_uses_result_size():
-    app.CONFIG = _with_pagination(enabled=False)
+    app.search_service.CONFIG = _with_pagination(enabled=False)
     payload = app.build_search_query(
         "kamera", page=3, result_size=42, apply_intent_reranking=False
     )
@@ -93,14 +103,14 @@ def test_pagination_disabled_omits_from_and_uses_result_size():
 
 
 def test_max_result_window_exceeded_raises_pagination_limit_error():
-    app.CONFIG = _with_pagination(page_size=20, max_result_window=100)
+    app.search_service.CONFIG = _with_pagination(page_size=20, max_result_window=100)
     # max_allowed_page = 100 // 20 = 5; sayfa 6 -> from=100, from+size=120 > 100
     with pytest.raises(app.PaginationLimitError):
         app.build_search_query("kamera", page=6, apply_intent_reranking=False)
 
 
 def test_max_allowed_last_page_does_not_raise():
-    app.CONFIG = _with_pagination(page_size=20, max_result_window=100)
+    app.search_service.CONFIG = _with_pagination(page_size=20, max_result_window=100)
     # max_allowed_page = 5; from=(5-1)*20=80, from+size=100 == max_result_window (izinli)
     payload = app.build_search_query("kamera", page=5, apply_intent_reranking=False)
     assert payload["from"] == 80
@@ -108,7 +118,7 @@ def test_max_allowed_last_page_does_not_raise():
 
 
 def test_pagination_limit_error_reports_requested_and_max_page():
-    app.CONFIG = _with_pagination(page_size=20, max_result_window=100)
+    app.search_service.CONFIG = _with_pagination(page_size=20, max_result_window=100)
     with pytest.raises(app.PaginationLimitError) as excinfo:
         app.build_search_query("kamera", page=99, apply_intent_reranking=False)
     assert excinfo.value.requested_page == 99
@@ -122,7 +132,7 @@ def test_autocomplete_query_never_includes_from():
 
 def test_autocomplete_size_unaffected_by_pagination():
     payload = app.build_autocomplete_query("kam")
-    assert payload["size"] == app.CONFIG.limits.autocomplete_fetch_size
+    assert payload["size"] == app.search_service.CONFIG.limits.autocomplete_fetch_size
 
 
 # ---------------------------------------------------------------------------
@@ -201,11 +211,11 @@ def test_current_page_and_page_size_reflected_in_result(monkeypatch):
     )
     result = app.search_products("kamera", page=2)
     assert result.current_page == 2
-    assert result.page_size == app.CONFIG.pagination.page_size
+    assert result.page_size == app.search_service.CONFIG.pagination.page_size
 
 
 def test_total_pages_capped_at_max_allowed_page(monkeypatch):
-    app.CONFIG = _with_pagination(page_size=20, max_result_window=100)
+    app.search_service.CONFIG = _with_pagination(page_size=20, max_result_window=100)
     # total çok büyük (1_000_000) olsa da max_allowed_page = 5'i aşmamalı.
     _mock_post_search(
         monkeypatch,
@@ -216,12 +226,18 @@ def test_total_pages_capped_at_max_allowed_page(monkeypatch):
 
 
 def test_deep_pagination_beyond_window_returns_friendly_error_not_crash(monkeypatch):
-    app.CONFIG = _with_pagination(page_size=20, max_result_window=100)
+    app.search_service.CONFIG = _with_pagination(page_size=20, max_result_window=100)
     calls = _mock_post_search(monkeypatch)
     result = app.search_products("kamera", page=999)
     assert result.hits is None
     assert result.error  # anlaşılır bir mesaj döner
-    assert calls == []  # Elasticsearch'e hiç istek atılmadı
+    # PaginationLimitError, `build_search_query` içinde (from+size hesabı)
+    # fırlatılır — bu noktadan SONRA hiçbir ürün arama isteği Elasticsearch'e
+    # gitmez. `resolve_intent_signals` (dinamik kategori keşfi) bundan
+    # BAĞIMSIZ, `build_search_query`den ÖNCE çalışır; bu yüzden en fazla bir
+    # keşif (size=0 aggregation) isteği atılmış olabilir — asla gerçek,
+    # aşırı sayfalı bir ürün arama isteği değil.
+    assert all(call["payload"].get("size") == 0 for call in calls)
 
 
 def test_search_error_from_elasticsearch_preserves_pagination_metadata(monkeypatch):
@@ -289,7 +305,7 @@ def test_exact_asin_preserved_with_page_param():
     lexical = payload["query"]["bool"]["must"][0]["bool"]["should"]
     asin_clauses = [c for c in lexical if "term" in c]
     assert len(asin_clauses) == 1
-    field = app.CONFIG.search_methods.exact_asin.field
+    field = app.search_service.CONFIG.search_methods.exact_asin.field
     assert asin_clauses[0]["term"][field]["value"] == "B000123456"
 
 
@@ -312,18 +328,18 @@ def test_dynamic_category_discovery_preserved_with_pagination(monkeypatch):
 
 
 def test_quality_ranking_stays_disabled_by_default_with_pagination():
-    assert app.CONFIG.quality_ranking.enabled is False
+    assert app.search_service.CONFIG.quality_ranking.enabled is False
     payload = app.build_search_query("kamera", page=2, apply_intent_reranking=False)
     assert "function_score" not in payload["query"]
 
 
 def test_discovery_filter_stays_disabled_by_default_with_pagination():
-    assert app.CONFIG.quality_ranking.discovery_filter_enabled is False
+    assert app.search_service.CONFIG.quality_ranking.discovery_filter_enabled is False
 
 
 def test_exact_asin_quality_bypass_preserved_with_pagination():
-    quality = dataclasses.replace(app.CONFIG.quality_ranking, enabled=True, bypass_for_exact_asin=True)
-    app.CONFIG = dataclasses.replace(app.CONFIG, quality_ranking=quality)
+    quality = dataclasses.replace(app.search_service.CONFIG.quality_ranking, enabled=True, bypass_for_exact_asin=True)
+    app.search_service.CONFIG = dataclasses.replace(app.search_service.CONFIG, quality_ranking=quality)
     payload = app.build_search_query(
         "B000123456", page=1, enable_exact_asin=True, apply_intent_reranking=False
     )
@@ -544,112 +560,139 @@ def test_main_search_button_uses_trigger_explicit_search_helper():
 # ---------------------------------------------------------------------------
 # Regresyon: BUG 2 — Enter ana aramayı çalıştırmıyordu.
 #
-# Kök neden: kurulu st_keyup sürümü (0.3.0 — PyPI'daki TEK/son sürüm de bu,
-# doğrulandı) `onkeyup`'ta HER tuş için (Enter dahil) birebir aynı şekilde
-# Streamlit.setComponentValue çağırır; Enter'ı diğer tuşlardan ayıran ayrı
-# bir event/callback yoktur. st_keyup çağrısına bir on_change bağlamak bu
-# yüzden Enter'ı DEĞİL, her tuş vuruşunun debounce sonrası tetiklediği HER
-# değişikliği yakalar — "yazarken ana aramayı otomatik tetikleme" kuralını
-# ihlal eder. st.form da çözüm değildir: input, st_keyup'ın KENDİ component
-# iframe'inin içindedir, ana sayfadaki bir <form>'un DOM ağacına hiç girmez.
-# Çözüm: gerçek `keydown`/Enter event'ini ayrı bir best-effort JS köprüsüyle
-# (_build_enter_key_bridge_html) doğrudan component'in iframe'i içindeki
-# input'a bağlayıp, Enter'da Ara butonunu programatik tıklatmak — böylece
-# Enter, Ara butonuyla AYNI state geçişini (_trigger_explicit_search) tetikler.
+# Kök neden: kurulu st_keyup sürümü (0.3.0) `onkeyup`'ta HER tuş için (Enter
+# dahil) birebir aynı şekilde Streamlit.setComponentValue çağırıyordu;
+# Enter'ı diğer tuşlardan ayıran ayrı bir event/callback yoktu. Bu yüzden bir
+# JS köprüsü (parent iframe'e erişip Ara butonunu programatik tıklatan)
+# gerekiyordu — kırılgan bir hack.
+#
+# Çözüm: st_keyup TAMAMEN kaldırıldı. Arama kutusu artık
+# `components/search_input` altındaki yerel, taşınabilir bir custom
+# component: kendi `keydown` event'ini KENDİ iframe'i içinde (parent
+# iframe'e erişmeden) dinler ve native Streamlit component protokolüyle
+# `{type: "typing"|"submit"|"select", query, event_id, asin}` şeklinde bir
+# JSON olayı Python'a bildirir (bkz. components/search_input/CONTRACT.md).
+# Hiçbir parent-iframe erişimi veya programatik buton tıklaması YOKTUR.
+# `app._handle_search_input_event` bu olayı işleyip "submit"/"select"i
+# `_trigger_explicit_search`/`_select_query`e yönlendirir — Ara butonuyla
+# TAMAMEN AYNI kod yolu. "typing" hiçbir zaman aramayı tetiklemez.
 # ---------------------------------------------------------------------------
 
-def test_keyup_path_never_wires_on_change_to_avoid_search_on_every_keystroke(monkeypatch):
-    """Test 4 (typing/autocomplete): st_keyup'a on_change bağlanmaz, yazma run_search'ü tetiklemez."""
-    monkeypatch.setattr(app, "HAS_KEYUP", True)
-    captured_kwargs = {}
+def test_st_keyup_dependency_fully_removed():
+    assert not hasattr(app, "HAS_KEYUP")
+    assert not hasattr(app, "st_keyup")
+    assert not hasattr(app, "_make_search_input")
+    assert not hasattr(app, "_build_enter_key_bridge_html")
+    assert not hasattr(app, "_render_enter_to_search_bridge")
 
-    def fake_st_keyup(*args, **kwargs):
-        captured_kwargs.update(kwargs)
-        return kwargs.get("value", "")
 
-    monkeypatch.setattr(app, "st_keyup", fake_st_keyup)
+def test_submit_event_triggers_explicit_search_and_resets_page(monkeypatch):
+    """Test 3: Enter (panelde aktif öneri yokken) -> submit olayı -> current_page 1, run_search True."""
+    session_state = {"current_page": 6, "run_search": False, "current_query": "gaming mouse"}
+    monkeypatch.setattr(app.st, "session_state", session_state)
+    event = {"type": "submit", "query": "gaming mouse", "event_id": "e1", "asin": None}
+
+    query, is_new_event = app._handle_search_input_event(event)
+
+    assert query == "gaming mouse"
+    assert is_new_event is True
+    assert session_state["current_page"] == 1
+    assert session_state["run_search"] is True
+
+
+def test_submit_event_with_different_query_still_resolves_to_page_one(monkeypatch):
+    """Test: farklı query ile submit -> current_page 6'dan 1'e döner, yeni query kullanılır."""
+    session_state = {"current_page": 6, "run_search": False, "search_query": "eski sorgu"}
+    monkeypatch.setattr(app.st, "session_state", session_state)
+    event = {"type": "submit", "query": "yeni sorgu", "event_id": "e1", "asin": None}
+
+    query, is_new_event = app._handle_search_input_event(event)
+
+    assert query == "yeni sorgu"
+    assert is_new_event is True
+    assert session_state["current_page"] == 1
+    page_to_fetch = app._resolve_page_for_new_search(
+        session_state["search_query"], query, session_state["current_page"]
+    )
+    assert page_to_fetch == 1
+
+
+def test_select_event_uses_select_query_helper(monkeypatch):
+    """Test 6/7: öneri seçimi (tıklama veya panelde aktifken Enter) -> select olayı ->
+    page 1, explicit search tetiklenir, input bir sonraki widget instance'ı için doldurulur."""
+    session_state = {"current_page": 6, "run_search": False, "query_widget_version": 0}
+    monkeypatch.setattr(app.st, "session_state", session_state)
+    event = {"type": "select", "query": "Wireless Gaming Mouse RGB", "event_id": "e1", "asin": "B0X"}
+
+    query, is_new_event = app._handle_search_input_event(event)
+
+    assert query == "Wireless Gaming Mouse RGB"
+    assert is_new_event is True
+    assert session_state["current_page"] == 1
+    assert session_state["run_search"] is True
+    assert session_state["pending_value"] == "Wireless Gaming Mouse RGB"
+    assert session_state["hide_suggestions_once"] is True
+    assert session_state["query_widget_version"] == 1
+
+
+def test_typing_event_never_triggers_search(monkeypatch):
+    """Test 4 (typing/autocomplete): "typing" olayı run_search'ü ASLA tetiklemez —
+    yalnızca canlı öneri panelinin güncellenmesi için güncel metni bildirir."""
     session_state = {"run_search": False, "current_page": 1, "search_query": "eski sorgu"}
     monkeypatch.setattr(app.st, "session_state", session_state)
+    event = {"type": "typing", "query": "gaming mo", "event_id": "e1", "asin": None}
 
-    app._make_search_input("search_box_v0", "gaming mo")
+    query, is_new_event = app._handle_search_input_event(event)
 
-    assert "on_change" not in captured_kwargs
+    assert query == "gaming mo"
+    assert is_new_event is True
     assert session_state["run_search"] is False
     assert session_state["current_page"] == 1
     assert session_state["search_query"] == "eski sorgu"  # ana sonuç sorgusu değişmedi
 
 
-def test_fallback_text_input_on_change_uses_shared_explicit_search_trigger(monkeypatch):
-    """Test 3 (Enter, st_keyup yokken): native on_change zaten yalnızca Enter/blur'da
-    tetiklenir ve Ara butonuyla AYNI helper'a bağlıdır."""
-    monkeypatch.setattr(app, "HAS_KEYUP", False)
-    captured = {}
+def test_repeated_event_id_is_not_reprocessed(monkeypatch):
+    # Ara butonuna basmak veya sidebar switch değiştirmek gibi component'le
+    # İLGİSİZ bir rerun'da component AYNI (zaten işlenmiş) olayı tekrar
+    # döndürebilir — bu asla yeniden tetiklenmemeli (ör. current_page
+    # beklenmedik şekilde 1'e dönmemeli).
+    session_state = {"current_page": 6, "run_search": False, "_search_input_last_event_id": "e1"}
+    monkeypatch.setattr(app.st, "session_state", session_state)
+    event = {"type": "submit", "query": "gaming mouse", "event_id": "e1", "asin": None}
 
-    def fake_text_input(*args, **kwargs):
-        captured["on_change"] = kwargs.get("on_change")
-        return kwargs.get("value", "")
+    query, is_new_event = app._handle_search_input_event(event)
 
-    monkeypatch.setattr(app.st, "text_input", fake_text_input)
-    app._make_search_input("search_box_v0", "gaming mouse")
-    assert captured["on_change"] is app._trigger_explicit_search
-
-
-def test_enter_bridge_html_targets_enter_key_input_box_and_button_label():
-    html_src = app._build_enter_key_bridge_html("Ara")
-    assert "event.key !== 'Enter'" in html_src
-    assert "input_box" in html_src
-    assert json.dumps("Ara") in html_src
-    assert "button.click()" in html_src
-    assert "setComponentValue" in html_src
+    assert is_new_event is False
+    assert session_state["current_page"] == 6  # dokunulmadı
+    assert session_state["run_search"] is False
 
 
-def test_enter_bridge_flushes_debounced_value_before_clicking_button():
-    # Enter, henüz debounce süresi dolmamış son karakterleri kaçırmamalı:
-    # köprü değeri flush ettikten SONRA butona tıklamalı.
-    html_src = app._build_enter_key_bridge_html("Ara")
-    set_value_idx = html_src.index("setComponentValue")
-    click_idx = html_src.index("button.click()")
-    assert set_value_idx < click_idx
+def test_no_event_returns_current_query_without_triggering(monkeypatch):
+    # Component'ten henüz hiç client-side olay gelmediği ilk render.
+    session_state = {"current_query": "kamera"}
+    monkeypatch.setattr(app.st, "session_state", session_state)
+
+    query, is_new_event = app._handle_search_input_event(None)
+
+    assert query == "kamera"
+    assert is_new_event is False
 
 
-def test_render_enter_to_search_bridge_noop_when_keyup_not_installed(monkeypatch):
-    monkeypatch.setattr(app, "HAS_KEYUP", False)
-    calls = []
-    monkeypatch.setattr(app.st, "iframe", lambda *a, **k: calls.append((a, k)))
-    app._render_enter_to_search_bridge("Ara")
-    assert calls == []
-
-
-def test_render_enter_to_search_bridge_renders_iframe_when_keyup_installed(monkeypatch):
-    monkeypatch.setattr(app, "HAS_KEYUP", True)
-    calls = []
-    monkeypatch.setattr(app.st, "iframe", lambda *a, **k: calls.append((a, k)))
-    app._render_enter_to_search_bridge("Ara")
-    assert len(calls) == 1
-    (html_arg,), kwargs = calls[0]
-    assert "input_box" in html_arg
-    height = kwargs.get("height")
-    assert height not in (0, 1)
-    assert height in ("content", "stretch") or (isinstance(height, int) and height > 0)
-
-
-def test_render_enter_to_search_bridge_swallows_exception(monkeypatch):
-    monkeypatch.setattr(app, "HAS_KEYUP", True)
-
-    def boom(*args, **kwargs):
-        raise RuntimeError("iframe render failed")
-
-    monkeypatch.setattr(app.st, "iframe", boom)
-    app._render_enter_to_search_bridge("Ara")  # exception fırlatmamalı
-
-
-def test_main_calls_enter_bridge_after_input_and_button_rendered():
+def test_main_wires_search_input_component_with_versioned_widget_key():
     source = inspect.getsource(app.main)
-    input_idx = source.index("_make_search_input(")
-    button_idx = source.index("_trigger_explicit_search()")
-    bridge_idx = source.index("_render_enter_to_search_bridge(")
-    assert input_idx < bridge_idx
-    assert button_idx < bridge_idx
+    assert "search_input(" in source
+    assert "key=widget_key" in source
+    assert "_handle_search_input_event(event)" in source
+
+
+def test_ara_button_and_submit_event_share_trigger_helper():
+    # Ara butonu VE component'in submit/select olayları AYNI
+    # _trigger_explicit_search state geçişini kullanır.
+    handler_source = inspect.getsource(app._handle_search_input_event)
+    assert "_trigger_explicit_search()" in handler_source
+    assert "_select_query(query)" in handler_source
+    main_source = inspect.getsource(app.main)
+    assert "_trigger_explicit_search()" in main_source
 
 
 def test_main_only_runs_search_when_run_search_flag_true():
@@ -658,7 +701,7 @@ def test_main_only_runs_search_when_run_search_flag_true():
     source = inspect.getsource(app.main)
     assert 'triggered = st.session_state.get("run_search", False)' in source
     triggered_idx = source.index("if triggered:")
-    search_call_idx = source.index("search_products(query_text")
+    search_call_idx = source.index("search_service.search_products(")
     assert triggered_idx < search_call_idx
 
 
@@ -681,8 +724,12 @@ def test_select_query_resets_page_and_triggers_explicit_search(monkeypatch):
 
 
 def test_suggestion_selection_uses_select_query_helper():
-    source = inspect.getsource(app.main)
-    assert '_select_query(item["title"])' in source
+    # Öneri seçimi artık ayrı bir "Bu ürünü ara" butonu üzerinden değil,
+    # search_input component'inin "select" olayı üzerinden gelir; her ikisi
+    # de _handle_search_input_event içinde AYNI _select_query helper'ına
+    # yönlendirilir (bkz. test_select_event_uses_select_query_helper).
+    source = inspect.getsource(app._handle_search_input_event)
+    assert '_select_query(query)' in source
 
 
 def test_example_query_chip_uses_select_query_helper():

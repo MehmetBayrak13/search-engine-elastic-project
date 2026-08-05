@@ -1,6 +1,11 @@
 """
 Dynamic category discovery testleri. Gerçek Elastic Cloud'a HİÇBİR istek
-atılmaz — `app._post_search` mock'lanır (bkz. `_mock_post_search` fixture).
+atılmaz — `app.search_service._post_search` mock'lanır (bkz. `_mock_post_search`
+fixture). Kategori keşif mantığı `services/search_service.py`de yaşıyor;
+`CONFIG`/`INTENT_RULES`/`_post_search`/`discover_category_intent` gibi
+mutable/monkeypatch edilebilecek isimler `app.CONFIG` değil
+`app.search_service.CONFIG` üzerinden değiştirilmeli (bkz. tests/test_pagination.py
+başındaki aynı gerekçe).
 """
 
 import dataclasses
@@ -33,7 +38,7 @@ def _clear_discovery_cache():
 
 
 def _mock_post_search(monkeypatch, response_by_index=None, default=(({}), None)):
-    """`app._post_search`ü mock'lar ve yapılan çağrıları kaydeder."""
+    """`app.search_service._post_search`ü mock'lar ve yapılan çağrıları kaydeder."""
     calls = []
 
     def fake_post_search(payload, timeout=20, index=None):
@@ -42,12 +47,12 @@ def _mock_post_search(monkeypatch, response_by_index=None, default=(({}), None))
             return response_by_index[index]
         return default
 
-    monkeypatch.setattr(app, "_post_search", fake_post_search)
+    monkeypatch.setattr(app.search_service, "_post_search", fake_post_search)
     return calls
 
 
 def test_discovery_runs_when_intent_rules_is_empty(monkeypatch):
-    monkeypatch.setattr(app, "INTENT_RULES", {})
+    monkeypatch.setattr(app.search_service, "INTENT_RULES", {})
     _mock_post_search(
         monkeypatch,
         {app.INDEX_NAME: ({"aggregations": AGGREGATIONS_WITH_TOILET_PAPER}, None)},
@@ -84,7 +89,9 @@ def test_turkish_translation_is_used_in_discovery_query(monkeypatch):
 def test_discovery_only_called_by_normal_search_build(monkeypatch):
     calls = []
     monkeypatch.setattr(
-        app, "discover_category_intent", lambda query_text: calls.append(query_text) or []
+        app.search_service,
+        "discover_category_intent",
+        lambda query_text, **kwargs: calls.append(query_text) or [],
     )
 
     app.build_autocomplete_query("kamera", apply_intent_reranking=True)
@@ -138,9 +145,9 @@ def test_dynamic_boosts_under_should_lexical_under_must(monkeypatch):
 
 def test_dynamic_intent_disabled_skips_discovery(monkeypatch):
     disabled_config = dataclasses.replace(
-        app.CONFIG, dynamic_intent=dataclasses.replace(app.CONFIG.dynamic_intent, enabled=False)
+        app.search_service.CONFIG, dynamic_intent=dataclasses.replace(app.search_service.CONFIG.dynamic_intent, enabled=False)
     )
-    monkeypatch.setattr(app, "CONFIG", disabled_config)
+    monkeypatch.setattr(app.search_service, "CONFIG", disabled_config)
     calls = _mock_post_search(monkeypatch)
 
     candidates = app.discover_category_intent("toilet paper")
@@ -150,10 +157,10 @@ def test_dynamic_intent_disabled_skips_discovery(monkeypatch):
 
 def test_minimum_query_length_is_enforced(monkeypatch):
     short_min_config = dataclasses.replace(
-        app.CONFIG,
-        dynamic_intent=dataclasses.replace(app.CONFIG.dynamic_intent, minimum_query_length=10),
+        app.search_service.CONFIG,
+        dynamic_intent=dataclasses.replace(app.search_service.CONFIG.dynamic_intent, minimum_query_length=10),
     )
-    monkeypatch.setattr(app, "CONFIG", short_min_config)
+    monkeypatch.setattr(app.search_service, "CONFIG", short_min_config)
     calls = _mock_post_search(monkeypatch)
 
     candidates = app.discover_category_intent("tv")
@@ -163,10 +170,10 @@ def test_minimum_query_length_is_enforced(monkeypatch):
 
 def test_max_category_candidates_limit_is_respected(monkeypatch):
     limited_config = dataclasses.replace(
-        app.CONFIG,
-        dynamic_intent=dataclasses.replace(app.CONFIG.dynamic_intent, max_category_candidates=2),
+        app.search_service.CONFIG,
+        dynamic_intent=dataclasses.replace(app.search_service.CONFIG.dynamic_intent, max_category_candidates=2),
     )
-    monkeypatch.setattr(app, "CONFIG", limited_config)
+    monkeypatch.setattr(app.search_service, "CONFIG", limited_config)
     many_buckets = {
         "by_categories": {
             "buckets": [
@@ -183,7 +190,7 @@ def test_max_category_candidates_limit_is_respected(monkeypatch):
 
 def test_aggregation_fields_come_from_config():
     payload = app.build_category_discovery_query("toilet paper")
-    expected_agg_names = set(app.CONFIG.dynamic_intent.aggregation_bucket_map.keys())
+    expected_agg_names = set(app.search_service.CONFIG.dynamic_intent.aggregation_bucket_map.keys())
     assert set(payload["aggs"].keys()) == expected_agg_names
 
 
@@ -191,34 +198,38 @@ def test_discovery_query_is_size_zero_with_short_timeout():
     payload = app.build_category_discovery_query("toilet paper")
     assert payload["size"] == 0
     assert payload["track_total_hits"] is False
-    assert payload["timeout"] == f"{app.CONFIG.dynamic_intent.timeout_seconds}s"
+    assert payload["timeout"] == f"{app.search_service.CONFIG.dynamic_intent.timeout_seconds}s"
 
 
 def test_build_category_discovery_query_does_not_raise_with_default_config():
     # Regresyon: production'da CONFIG.quality_ranking eksik/uyumsuzken
     # build_category_discovery_query AttributeError ile çöküyordu.
-    # Gerçek (mock'lanmamış) app.CONFIG ile çağrılır.
+    # Gerçek (mock'lanmamış) app.search_service.CONFIG ile çağrılır.
     payload = app.build_category_discovery_query("toilet paper")
     assert "query" in payload
 
 
 def test_app_imports_and_builds_normal_search_query():
-    assert app.CONFIG is not None
-    assert app.CONFIG.quality_ranking is not None
+    assert app.search_service.CONFIG is not None
+    assert app.search_service.CONFIG.quality_ranking is not None
     query = app.build_search_query("toilet paper")
     assert "bool" in query["query"]
 
 
 def test_no_hardcoded_watch_check_in_app_py():
-    source = app.__file__
-    with open(source, "r", encoding="utf-8") as file:
-        content = file.read()
-    assert '"watch"' not in content
-    assert "'watch'" not in content
+    # Intent tespiti artık app.py'de değil services/search_service.py'de
+    # yaşıyor (bkz. proje mimarisi) — koruma amacı aynı: hiçbir "watch"
+    # business-rule'u kod içinde sabit yazılı olmamalı, tamamen
+    # config/intent_rules.json'dan gelmeli.
+    for source in (app.__file__, app.search_service.__file__):
+        with open(source, "r", encoding="utf-8") as file:
+            content = file.read()
+        assert '"watch"' not in content
+        assert "'watch'" not in content
 
 
 def test_turkish_suffix_variations_are_not_hardcoded_in_app_py():
-    with open(app.__file__, "r", encoding="utf-8") as file:
+    with open(app.search_service.__file__, "r", encoding="utf-8") as file:
         content = file.read().casefold()
     suffix_variants = [
         "telefonlar", "telefonların", "telefonlarda", "telefonlardan",

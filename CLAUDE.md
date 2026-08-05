@@ -13,7 +13,7 @@ comments, and log messages throughout the codebase are in Turkish.
 ## Commands
 
 ```bash
-pip install -r requirements.txt   # streamlit, requests, streamlit-keyup
+pip install -r requirements.txt   # streamlit, requests
 streamlit run app.py              # run the search app (needs env vars below)
 python full_amazon_importer.py    # run/resume the full dataset import (needs different env vars)
 python index_amazon.py            # legacy: import a small (10/category) sample into amazon-products-v1
@@ -38,10 +38,32 @@ Two unrelated Elasticsearch auth schemes are in play — don't confuse them:
 
 ## Architecture
 
-### Search app (`app.py`)
+### Search app (`app.py` + `services/` + `components/`)
 
-Single-file Streamlit app, no other local modules. Everything — query
-building, HTTP calls, and rendering — lives in this one file.
+`app.py` is the Streamlit UI/session_state orchestration layer only. Query
+building, HTTP calls to Elasticsearch, intent detection, translation
+expansion, and dynamic category discovery live in `services/search_service.py`
+and `services/autocomplete_service.py` — neither imports Streamlit or touches
+`session_state`, so the same functions could be called from a future FastAPI
+endpoint without change. Shared JSON-safe types (`SearchResult`,
+`SuggestionItem`, `PaginationLimitError`) live in `services/search_models.py`.
+Caching (`st.cache_data`) is a Streamlit concern and stays in `app.py`: the
+service functions accept a `fetch_aggregations`/`fetch_hits` dependency-injection
+parameter, defaulting to an uncached real Elasticsearch call; `app.py` injects
+its own cached wrapper for the real UI call path. `app.py` still re-exports
+the services' top-level functions by name (e.g. `app.build_search_query(...)`
+works) for test/back-compat convenience, but always calls through the
+qualified `search_service.X(...)` / `autocomplete_service.X(...)` form in
+`main()` so the cached fetchers are actually used.
+
+The search box and its autocomplete dropdown are a single Streamlit custom
+component, `components/search_input/` (buildless static HTML/JS frontend +
+a thin Python wrapper). It contains no search/autocomplete business logic —
+it only emits generic `{type: "typing"|"submit"|"select", query, event_id,
+asin}` events over Streamlit's standard component protocol (see
+`components/search_input/CONTRACT.md`), which `app._handle_search_input_event`
+turns into the same `_trigger_explicit_search`/`_select_query` state
+transitions the "Ara" button uses.
 
 - **Two separate indices, two separate purposes.** Full-text search hits
   `amazon-products-000001,amazon-products-000002` (`INDEX_NAME`). Live
@@ -84,9 +106,11 @@ building, HTTP calls, and rendering — lives in this one file.
   `components.html(...)` (not `st.markdown`) so the whole card can be one
   clickable `onclick` region that opens `amazon.com/dp/<asin>` in a new tab.
   All interpolated values go through `html.escape` first.
-- `st_keyup` is optional (see the `HAS_KEYUP` try/except) — if it's not
-  installed, the app falls back to plain `st.text_input` with reduced
-  liveness rather than breaking.
+- The `streamlit-keyup` dependency and the JS "bridge" hack it required to
+  make Enter reliable were removed entirely (that package's single/only
+  release, 0.3.0, can't distinguish Enter from any other keystroke, which is
+  what forced the old bridge to exist). The `components/search_input` custom
+  component replaces it — see above.
 
 ### Import scripts
 
@@ -153,6 +177,10 @@ Main project files:
 
 - `app.py`
 - `config.py`
+- `services/search_service.py`
+- `services/autocomplete_service.py`
+- `services/search_models.py`
+- `components/search_input/`
 - `config/search_config.json`
 - `config/intent_rules.json`
 - `config/query_translations.json`

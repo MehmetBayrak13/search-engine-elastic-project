@@ -110,6 +110,11 @@
       "image_url", "main_category", "categories", "source_category"
     ]
   },
+  "autocomplete_ui": {
+    "panel_max_height_px": 360,
+    "row_height_px": 56,
+    "show_images": true
+  },
   "product_url_template": "https://www.amazon.com/dp/{asin}",
   "ui": {
     "hero_logo": "🛍️",

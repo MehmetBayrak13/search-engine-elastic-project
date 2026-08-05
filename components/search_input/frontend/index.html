@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<title>search_input</title>
+<style>
+    :root {
+        --si-bg: #ffffff;
+        --si-fg: #111827;
+        --si-border: #d1d5db;
+        --si-input-bg: #ffffff;
+        --si-panel-bg: #ffffff;
+        --si-hover-bg: #f3f4f6;
+        --si-active-bg: #eef2ff;
+        --si-meta-fg: #6b7280;
+        --si-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+        --si-separator: #f0f1f3;
+        --si-placeholder: #9ca3af;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+        margin: 0;
+        padding: 0;
+        background: transparent;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        overflow: hidden;
+    }
+    .si-wrap { position: relative; width: 100%; }
+    .si-input {
+        width: 100%;
+        font-size: 1rem;
+        line-height: 1.4;
+        padding: 10px 14px;
+        border: 1px solid var(--si-border);
+        border-radius: 10px;
+        background: var(--si-input-bg);
+        color: var(--si-fg);
+        outline: none;
+    }
+    .si-input::placeholder { color: var(--si-placeholder); }
+    .si-input:focus { border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.18); }
+
+    .si-panel {
+        margin-top: 6px;
+        background: var(--si-panel-bg);
+        border: 1px solid var(--si-border);
+        border-radius: 12px;
+        box-shadow: var(--si-shadow);
+        overflow-y: auto;
+        overflow-x: hidden;
+    }
+    .si-panel[hidden] { display: none; }
+
+    .si-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 12px;
+        cursor: pointer;
+        border-bottom: 1px solid var(--si-separator);
+    }
+    .si-row:last-child { border-bottom: none; }
+    .si-row:hover, .si-row.si-active { background: var(--si-hover-bg); }
+    .si-row.si-active { background: var(--si-active-bg); }
+
+    .si-row-icon {
+        flex-shrink: 0;
+        width: 32px;
+        height: 32px;
+        border-radius: 6px;
+        object-fit: contain;
+        background: #f9fafb;
+        border: 1px solid #f3f4f6;
+    }
+    .si-row-icon.si-icon-fallback {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1rem;
+        color: var(--si-meta-fg);
+    }
+
+    .si-row-info { flex: 1; min-width: 0; }
+    .si-row-title {
+        font-size: 0.9rem;
+        font-weight: 600;
+        color: var(--si-fg);
+        line-height: 1.3;
+        display: -webkit-box;
+        -webkit-line-clamp: 1;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+        word-break: break-word;
+    }
+    .si-row-meta {
+        font-size: 0.76rem;
+        color: var(--si-meta-fg);
+        margin-top: 2px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+</style>
+</head>
+<body>
+<div class="si-wrap">
+    <input class="si-input" id="si-input" type="text" autocomplete="off" spellcheck="false" role="combobox"
+           aria-expanded="false" aria-autocomplete="list" aria-controls="si-panel">
+    <div class="si-panel" id="si-panel" role="listbox" hidden></div>
+</div>
+<script>
+(function () {
+    "use strict";
+
+    // ------------------------------------------------------------------
+    // Minimal Streamlit bidirectional component protocol (no build step,
+    // no external library — same buildless approach as st_keyup). Sözleşme
+    // (bkz. components/search_input/README.md):
+    //   {type: "typing"|"submit"|"select", query: str, event_id: str, asin: str|null}
+    // Bu sözleşim ileride React tabanlı bir component'e taşınırken de
+    // AYNEN korunmalı.
+    // ------------------------------------------------------------------
+    var Streamlit = {
+        _ready: false,
+        _lastHeight: null,
+        init: function () {
+            window.addEventListener("message", function (event) {
+                if (!event.data || event.data.type !== "streamlit:render") return;
+                onRender(event.data);
+            });
+            window.parent.postMessage({ type: "streamlit:componentReady", apiVersion: 1 }, "*");
+        },
+        setComponentValue: function (value) {
+            window.parent.postMessage(
+                { type: "streamlit:setComponentValue", value: value, dataType: "json" }, "*"
+            );
+        },
+        setFrameHeight: function (height) {
+            if (height === this._lastHeight) return;
+            this._lastHeight = height;
+            window.parent.postMessage({ type: "streamlit:setFrameHeight", height: height }, "*");
+        }
+    };
+
+    var inputEl = document.getElementById("si-input");
+    var panelEl = document.getElementById("si-panel");
+
+    var hasMounted = false;
+    var debounceTimer = null;
+    var eventCounter = 0;
+    var suggestions = [];
+    var activeIndex = -1;
+    var userClosed = false;
+    var currentConfig = {
+        debounceMs: 300, panelMaxHeightPx: 360, rowHeightPx: 56, showImages: true, placeholder: ""
+    };
+
+    function nextEventId() {
+        eventCounter += 1;
+        return Date.now().toString(36) + "-" + eventCounter;
+    }
+
+    function emit(type, query, asin) {
+        Streamlit.setComponentValue({
+            type: type,
+            query: query,
+            event_id: nextEventId(),
+            asin: asin || null
+        });
+    }
+
+    function closePanel() {
+        panelEl.hidden = true;
+        panelEl.innerHTML = "";
+        activeIndex = -1;
+        inputEl.setAttribute("aria-expanded", "false");
+        resize();
+    }
+
+    function openPanelIfAny() {
+        if (userClosed || suggestions.length === 0) {
+            panelEl.hidden = true;
+            resize();
+            return;
+        }
+        panelEl.hidden = false;
+        inputEl.setAttribute("aria-expanded", "true");
+        renderRows();
+        resize();
+    }
+
+    function renderRows() {
+        panelEl.innerHTML = "";
+        panelEl.style.maxHeight = currentConfig.panelMaxHeightPx + "px";
+        suggestions.forEach(function (item, idx) {
+            var row = document.createElement("div");
+            row.className = "si-row" + (idx === activeIndex ? " si-active" : "");
+            row.id = "si-row-" + idx;
+            row.setAttribute("role", "option");
+            row.style.minHeight = currentConfig.rowHeightPx + "px";
+
+            if (currentConfig.showImages) {
+                var img = document.createElement("img");
+                img.className = "si-row-icon";
+                img.alt = "";
+                img.src = item.image_url || "";
+                img.onerror = function () {
+                    this.onerror = null;
+                    this.replaceWith(makeFallbackIcon());
+                };
+                row.appendChild(img);
+            } else {
+                row.appendChild(makeFallbackIcon());
+            }
+
+            var info = document.createElement("div");
+            info.className = "si-row-info";
+            var title = document.createElement("div");
+            title.className = "si-row-title";
+            title.innerHTML = item.title_html || "";
+            var meta = document.createElement("div");
+            meta.className = "si-row-meta";
+            meta.innerHTML = item.meta_html || "";
+            info.appendChild(title);
+            info.appendChild(meta);
+            row.appendChild(info);
+
+            row.addEventListener("mousedown", function (event) {
+                // input'un blur olmasını engelle ki click tetiklenmeden önce
+                // panel kapanmasın (bkz. handleBlur).
+                event.preventDefault();
+            });
+            row.addEventListener("click", function () {
+                selectSuggestion(idx);
+            });
+            row.addEventListener("mouseenter", function () {
+                setActive(idx);
+            });
+
+            panelEl.appendChild(row);
+        });
+    }
+
+    function makeFallbackIcon() {
+        var span = document.createElement("div");
+        span.className = "si-row-icon si-icon-fallback";
+        span.textContent = "🔍"; // 🔍
+        return span;
+    }
+
+    function setActive(idx) {
+        activeIndex = idx;
+        var rows = panelEl.querySelectorAll(".si-row");
+        rows.forEach(function (row, i) {
+            row.classList.toggle("si-active", i === idx);
+        });
+        if (idx >= 0 && rows[idx]) {
+            rows[idx].scrollIntoView({ block: "nearest" });
+        }
+    }
+
+    function selectSuggestion(idx) {
+        var item = suggestions[idx];
+        if (!item) return;
+        userClosed = true;
+        closePanel();
+        emit("select", item.title_text || "", item.asin || "");
+    }
+
+    function scheduleTyping() {
+        if (debounceTimer) window.clearTimeout(debounceTimer);
+        debounceTimer = window.setTimeout(function () {
+            debounceTimer = null;
+            emit("typing", inputEl.value, null);
+        }, currentConfig.debounceMs);
+    }
+
+    function submitPlainQuery() {
+        if (debounceTimer) {
+            window.clearTimeout(debounceTimer);
+            debounceTimer = null;
+        }
+        userClosed = true;
+        closePanel();
+        emit("submit", inputEl.value, null);
+    }
+
+    inputEl.addEventListener("input", function () {
+        userClosed = false;
+        scheduleTyping();
+    });
+
+    inputEl.addEventListener("keydown", function (event) {
+        if (event.key === "ArrowDown") {
+            if (panelEl.hidden || suggestions.length === 0) return;
+            event.preventDefault();
+            setActive(Math.min(activeIndex + 1, suggestions.length - 1));
+        } else if (event.key === "ArrowUp") {
+            if (panelEl.hidden || suggestions.length === 0) return;
+            event.preventDefault();
+            setActive(Math.max(activeIndex - 1, -1));
+        } else if (event.key === "Enter") {
+            event.preventDefault();
+            if (!panelEl.hidden && activeIndex >= 0 && suggestions[activeIndex]) {
+                selectSuggestion(activeIndex);
+            } else {
+                submitPlainQuery();
+            }
+        } else if (event.key === "Escape") {
+            if (!panelEl.hidden) {
+                event.preventDefault();
+                userClosed = true;
+                closePanel();
+            }
+        }
+    });
+
+    inputEl.addEventListener("blur", function () {
+        // mousedown preventDefault sayesinde satır tıklaması blur'dan ÖNCE
+        // işlenmiş olur; burada yalnızca gerçekten odak dışına çıkıldığında
+        // paneli kapatıyoruz (best-effort, bkz. mousedown handler'ı).
+        window.setTimeout(function () {
+            userClosed = true;
+            closePanel();
+        }, 120);
+    });
+
+    function resize() {
+        window.requestAnimationFrame(function () {
+            var height = document.body.scrollHeight;
+            Streamlit.setFrameHeight(height);
+        });
+    }
+
+    function onRender(data) {
+        var args = data.args || {};
+        currentConfig.debounceMs = args.debounceMs || 300;
+        currentConfig.panelMaxHeightPx = args.panelMaxHeightPx || 360;
+        currentConfig.rowHeightPx = args.rowHeightPx || 56;
+        currentConfig.showImages = args.showImages !== false;
+        currentConfig.placeholder = args.placeholder || "";
+
+        inputEl.placeholder = currentConfig.placeholder;
+
+        if (data.theme) {
+            applyTheme(data.theme);
+        }
+
+        if (!hasMounted) {
+            hasMounted = true;
+            inputEl.value = args.value || "";
+            inputEl.focus({ preventScroll: true });
+        }
+
+        suggestions = Array.isArray(args.suggestions) ? args.suggestions : [];
+        activeIndex = -1;
+        if (!userClosed && suggestions.length > 0 && document.activeElement === inputEl) {
+            openPanelIfAny();
+        } else {
+            panelEl.hidden = true;
+            panelEl.innerHTML = "";
+        }
+        resize();
+    }
+
+    function applyTheme(theme) {
+        var root = document.documentElement.style;
+        var isDark = (theme.base || "").toLowerCase() === "dark";
+        if (isDark) {
+            root.setProperty("--si-bg", "transparent");
+            root.setProperty("--si-fg", theme.textColor || "#f3f4f6");
+            root.setProperty("--si-border", "#3f3f46");
+            root.setProperty("--si-input-bg", theme.secondaryBackgroundColor || "#27272a");
+            root.setProperty("--si-panel-bg", theme.secondaryBackgroundColor || "#27272a");
+            root.setProperty("--si-hover-bg", "#3f3f46");
+            root.setProperty("--si-active-bg", "#4338ca");
+            root.setProperty("--si-meta-fg", "#a1a1aa");
+            root.setProperty("--si-separator", "#3f3f46");
+            root.setProperty("--si-placeholder", "#71717a");
+            root.setProperty("--si-shadow", "0 8px 24px rgba(0, 0, 0, 0.5)");
+        } else {
+            root.setProperty("--si-bg", "#ffffff");
+            root.setProperty("--si-fg", theme.textColor || "#111827");
+            root.setProperty("--si-border", "#d1d5db");
+            root.setProperty("--si-input-bg", "#ffffff");
+            root.setProperty("--si-panel-bg", "#ffffff");
+            root.setProperty("--si-hover-bg", "#f3f4f6");
+            root.setProperty("--si-active-bg", "#eef2ff");
+            root.setProperty("--si-meta-fg", "#6b7280");
+            root.setProperty("--si-separator", "#f0f1f3");
+            root.setProperty("--si-placeholder", "#9ca3af");
+            root.setProperty("--si-shadow", "0 8px 24px rgba(0, 0, 0, 0.12)");
+        }
+    }
+
+    Streamlit.init();
+    resize();
+})();
+</script>
+</body>
+</html>
