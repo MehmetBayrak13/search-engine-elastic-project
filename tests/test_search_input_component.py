@@ -10,6 +10,7 @@ Gerçek bir tarayıcı/DOM çalıştırılmaz — bu testler statik HTML/JS metn
 ve Python tarafındaki payload üretimini doğrular.
 """
 
+import inspect
 from pathlib import Path
 
 import app
@@ -151,6 +152,101 @@ def test_search_input_wrapper_has_no_business_logic():
     assert "search_service" not in source
     assert "autocomplete_service" not in source
     assert "_post_search" not in source
+
+
+
+# ---------------------------------------------------------------------------
+# Event/rerun akışı — component <-> app.py döngüsünün gerçek titreme/loop
+# kaynağını kapatan davranışlar. Bkz. `_handle_search_input_event` ve
+# `_suggestions_feedback_changed` docstring'leri.
+# ---------------------------------------------------------------------------
+
+def test_initial_mount_never_emits_from_onrender():
+    # `onRender` yalnızca `hasMounted` false iken input.value'yu set eder;
+    # bunun DIŞINDA (mount dahil) hiçbir yerde `emit(` çağırmaz — typing/submit/
+    # select event'leri yalnızca gerçek kullanıcı etkileşimi (input/keydown/
+    # click) listener'larından tetiklenir.
+    render_start = _FRONTEND_HTML.index("function onRender(")
+    render_end = _FRONTEND_HTML.index("function applyTheme(")
+    on_render_body = _FRONTEND_HTML[render_start:render_end]
+    assert "emit(" not in on_render_body
+
+
+def test_suggestions_prop_update_alone_does_not_emit():
+    # `suggestions` prop'u yeniden geldiğinde (`onRender` içindeki
+    # `suggestions = Array.isArray(...)` ataması) yalnızca panel render
+    # edilir (`openPanelIfAny` / `renderRows`) — component değeri set edilmez.
+    render_start = _FRONTEND_HTML.index("function onRender(")
+    render_end = _FRONTEND_HTML.index("function applyTheme(")
+    on_render_body = _FRONTEND_HTML[render_start:render_end]
+    assert "setComponentValue" not in on_render_body
+    assert "openPanelIfAny" in on_render_body
+
+
+def test_repeated_typing_event_id_is_ignored_and_state_untouched(monkeypatch):
+    session_state = {
+        "_search_input_last_event_id": "t1",
+        "current_page": 6,
+        "run_search": False,
+    }
+    monkeypatch.setattr(app.st, "session_state", session_state)
+    event = {"type": "typing", "query": "gaming mo", "event_id": "t1", "asin": None}
+
+    query, is_new_event = app._handle_search_input_event(event)
+
+    assert query == "gaming mo"
+    assert is_new_event is False
+    # Aynı event_id ikinci kez görülünce hiçbir state değişmemeli.
+    assert session_state["current_page"] == 6
+    assert session_state["run_search"] is False
+
+
+def test_typing_event_processed_exactly_once_across_reruns(monkeypatch):
+    # Bir "typing" olayı, aynı component değeri (aynı event_id) Streamlit
+    # tarafından sonraki reruns'larda tekrar döndürüldüğünde yalnızca İLK
+    # seferinde "yeni" sayılmalı.
+    session_state = {}
+    monkeypatch.setattr(app.st, "session_state", session_state)
+    event = {"type": "typing", "query": "kamera", "event_id": "t2", "asin": None}
+
+    _, first_is_new = app._handle_search_input_event(event)
+    _, second_is_new = app._handle_search_input_event(event)
+    _, third_is_new = app._handle_search_input_event(event)
+
+    assert first_is_new is True
+    assert second_is_new is False
+    assert third_is_new is False
+
+
+def test_unchanged_suggestions_do_not_require_rerun():
+    payload = [{"asin": "B0X", "title_text": "Wireless Mouse"}]
+    assert app._suggestions_feedback_changed(payload, payload, False, False) is False
+    assert app._suggestions_feedback_changed(list(payload), list(payload), False, False) is False
+
+
+def test_changed_suggestions_require_rerun():
+    old_payload = [{"asin": "B0X", "title_text": "Wireless Mouse"}]
+    new_payload = [{"asin": "B0Y", "title_text": "Gaming Mouse"}]
+    assert app._suggestions_feedback_changed(old_payload, new_payload, False, False) is True
+
+
+def test_error_state_transition_requires_rerun_even_if_payload_matches():
+    payload: list = []
+    assert app._suggestions_feedback_changed(payload, payload, False, True) is True
+    assert app._suggestions_feedback_changed(payload, payload, True, False) is True
+
+
+def test_typing_rerun_is_conditional_on_suggestions_change_in_main_source():
+    # Kök neden: her "typing" olayı için KOŞULSUZ st.rerun() çağrısı, zaten
+    # component'in kendi benzersiz event_id'sinin tetiklediği otomatik
+    # rerun'un ÜSTÜNE binip her tuş vuruşunda sayfayı iki kez çiziyordu. Bu
+    # artık `_suggestions_feedback_changed` ile koşullu olmalı.
+    source = inspect.getsource(app.main)
+    typing_block_start = source.index('event_type == "typing" and show_suggestions')
+    typing_block_end = source.index("elif event_type in", typing_block_start)
+    typing_block = source[typing_block_start:typing_block_end]
+    assert "_suggestions_feedback_changed(" in typing_block
+    assert "if _suggestions_feedback_changed(" in typing_block
 
 
 def test_search_input_frontend_dir_resolves_regardless_of_cwd():

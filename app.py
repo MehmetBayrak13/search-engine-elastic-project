@@ -466,6 +466,25 @@ def _handle_search_input_event(event: dict | None) -> tuple[str, bool]:
     return query, True
 
 
+def _suggestions_feedback_changed(
+    old_payload: list, new_payload: list, old_error: bool, new_error: bool
+) -> bool:
+    """Yeni fetch edilen öneri/hatanın component'e geri beslenmek için
+    GERÇEKTEN farklı olup olmadığını söyler.
+
+    Bir "typing" olayı işlendiğinde öneriler her zaman component'e aynı run
+    içinde geri verilemez (bkz. main() içindeki ilgili yorum) — bu yüzden bir
+    ek `st.rerun()` gerekir, ANCAK yalnızca sonuç önceki durumdan farklıysa.
+    Aksi halde (ör. art arda gelen prefix'ler aynı üst-N sonucu döndürdüğünde)
+    hiçbir görsel değişikliği olmayan bir rerun sayfayı gereksiz yere
+    yeniden çizer — art arda tetiklenince bu, kullanıcı yazarken sürekli bir
+    "titreme" (flicker) ve input'un adeta kullanılamaz hale gelmesi izlenimi
+    yaratır. Panel/hata durumu değişmediyse bir sonraki normal render zaten
+    aynı `stored_suggestions`'ı kullanacağından ek rerun'a gerek yoktur.
+    """
+    return new_payload != old_payload or new_error != old_error
+
+
 # ---------------------------------------------------------------------------
 # Arayüz yardımcıları
 # ---------------------------------------------------------------------------
@@ -860,6 +879,7 @@ def main():
     search_button_label = ui.label("search_button", "Ara")
 
     stored_suggestions = st.session_state.get("_suggestions_payload", [])
+    stored_suggestions_error = st.session_state.get("_suggestions_error", False)
     col_input, col_button = st.columns([5, 1])
     with col_input:
         event = search_input(
@@ -906,9 +926,18 @@ def main():
     # bir sonraki run'a taşınır; o run'da hiçbir yeni client-side olay
     # olmadığından aynı event_id geri döner (`is_new_event=False`, tekrar
     # tetiklenmez) ama component artık GÜNCEL önerileri props olarak alır.
-    # Bu tek ekstra (ES isteği içermeyen) rerun, önerilerin her zaman EN SON
-    # yazılan metne ait olmasını garanti eder — aksi halde panel bir tuş
-    # vuruşu geriden takip ederdi.
+    #
+    # Bu ek rerun yalnızca `_suggestions_feedback_changed` GERÇEK bir fark
+    # tespit ettiğinde yapılır (ör. hızlı art arda gelen prefix'ler aynı
+    # üst-N öneriyi döndürdüğünde YAPILMAZ). Component'in kendi `event_id`'i
+    # her "typing" olayında zaten benzersiz olduğundan (bkz. CONTRACT.md) her
+    # tuş vuruşu tek başına Streamlit'in component-değeri-değişti otomatik
+    # rerun'unu tetikler; buradaki KOŞULSUZ ikinci `st.rerun()` bunun üstüne
+    # binip her tuş vuruşunda sayfayı iki kez tam olarak yeniden çizerdi —
+    # gözlemlenen "sürekli yanıp sönme / input kullanılamaz hale gelme"
+    # sorununun kök nedeni buydu. Koşullu hale getirmek, önerilerin hâlâ HER
+    # ZAMAN en son yazılan metne ait olmasını (asıl garanti) korurken
+    # gereksiz ikinci rerun'u ortadan kaldırır.
     # -----------------------------------------------------------------------
     min_chars = CONFIG.limits.autocomplete_min_chars
     show_suggestions = live_suggestions and not st.session_state.pop("hide_suggestions_once", False)
@@ -923,12 +952,17 @@ def main():
                 query_text, fetch_hits=_fetch_suggestion_hits
             )
             if sug_error:
-                st.session_state["_suggestions_payload"] = []
-                st.session_state["_suggestions_error"] = True
+                new_payload: list = []
+                new_error = True
             else:
-                st.session_state["_suggestions_payload"] = _build_suggestion_payload(suggestions)
-                st.session_state["_suggestions_error"] = False
-            st.rerun()
+                new_payload = _build_suggestion_payload(suggestions)
+                new_error = False
+            st.session_state["_suggestions_payload"] = new_payload
+            st.session_state["_suggestions_error"] = new_error
+            if _suggestions_feedback_changed(
+                stored_suggestions, new_payload, stored_suggestions_error, new_error
+            ):
+                st.rerun()
         elif event_type in ("typing", "submit", "select"):
             # Boş/kısa sorgu, öneriler kapalı veya submit/select: panel
             # kapanmalı — component bunu client-side zaten yapar, burada
