@@ -88,6 +88,12 @@ def _minimal_search_config(**overrides):
             "discovery_filter_enabled": False,
             "discovery_min_data_quality_score": 0.3,
         },
+        "pagination": {
+            "enabled": True,
+            "page_size": 20,
+            "max_result_window": 10000,
+            "max_visible_pages": 7,
+        },
         "source_fields": {
             "search": ["parent_asin", "title"],
             "suggestions": ["parent_asin", "title"],
@@ -234,6 +240,81 @@ def test_app_config_has_quality_ranking_field():
     assert hasattr(app_config, "quality_ranking")
     assert app_config.quality_ranking.enabled is False
     assert app_config.quality_ranking.discovery_filter_enabled is False
+
+
+def test_pagination_loads_from_default_repo_config():
+    app_config = load_search_config()
+    assert app_config.pagination.enabled is True
+    assert app_config.pagination.page_size == 20
+    assert app_config.pagination.max_result_window == 10000
+    assert app_config.pagination.max_visible_pages == 7
+
+
+def test_pagination_invalid_enabled_type_is_rejected(tmp_path):
+    data = _minimal_search_config()
+    data["pagination"]["enabled"] = "yes"
+    path = _write_json(tmp_path / "search_config.json", data)
+    with pytest.raises(ConfigError):
+        load_search_config(path)
+
+
+def test_pagination_non_positive_page_size_is_rejected(tmp_path):
+    data = _minimal_search_config()
+    data["pagination"]["page_size"] = 0
+    path = _write_json(tmp_path / "search_config.json", data)
+    with pytest.raises(ConfigError):
+        load_search_config(path)
+
+
+def test_pagination_negative_max_visible_pages_is_rejected(tmp_path):
+    data = _minimal_search_config()
+    data["pagination"]["max_visible_pages"] = -1
+    path = _write_json(tmp_path / "search_config.json", data)
+    with pytest.raises(ConfigError):
+        load_search_config(path)
+
+
+def test_pagination_max_result_window_below_page_size_is_rejected(tmp_path):
+    data = _minimal_search_config()
+    data["pagination"]["page_size"] = 50
+    data["pagination"]["max_result_window"] = 10
+    path = _write_json(tmp_path / "search_config.json", data)
+    with pytest.raises(ConfigError):
+        load_search_config(path)
+
+
+def test_pagination_max_result_window_equal_to_page_size_is_allowed(tmp_path):
+    data = _minimal_search_config()
+    data["pagination"]["page_size"] = 20
+    data["pagination"]["max_result_window"] = 20
+    path = _write_json(tmp_path / "search_config.json", data)
+    app_config = load_search_config(path)
+    assert app_config.pagination.max_result_window == 20
+
+
+def test_pagination_missing_section_is_rejected(tmp_path):
+    data = _minimal_search_config()
+    del data["pagination"]
+    path = _write_json(tmp_path / "search_config.json", data)
+    with pytest.raises(ConfigError):
+        load_search_config(path)
+
+
+def test_pagination_max_allowed_page_property():
+    data = _minimal_search_config(**{"pagination.page_size": 20})
+    # max_allowed_page = max_result_window // page_size
+    from config import PaginationConfig
+
+    pagination = PaginationConfig(
+        enabled=True, page_size=20, max_result_window=10000, max_visible_pages=7
+    )
+    assert pagination.max_allowed_page == 500
+
+
+def test_app_config_has_pagination_field():
+    app_config = load_search_config()
+    assert hasattr(app_config, "pagination")
+    assert app_config.pagination.page_size > 0
 
 
 def test_empty_intent_rules_is_allowed(tmp_path):

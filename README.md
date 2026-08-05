@@ -3,8 +3,8 @@
 Elastic Cloud destekli, Streamlit tabanlı ürün arama uygulaması. Amazon Reviews
 2023 veri setinden indexlenmiş ürünler üzerinde exact ASIN, phrase, multi-field
 ve fuzzy arama; Edge NGram autocomplete; Elasticsearch aggregation tabanlı
-dinamik kategori keşfi; opsiyonel manuel intent override katmanı ve
-Türkçe→İngilizce sorgu genişletme destekler.
+dinamik kategori keşfi; opsiyonel manuel intent override katmanı; `from + size`
+tabanlı sayfalama ve Türkçe→İngilizce sorgu genişletme destekler.
 
 ## Kurulum ve çalıştırma
 
@@ -47,7 +47,7 @@ Arama davranışının tamamı `config/` altındaki JSON dosyalarından okunur �
 
 | Dosya | İçerik |
 |---|---|
-| `config/search_config.json` | Index adları, timeout/limit değerleri, exact ASIN / phrase / multi-match / fuzzy / autocomplete alan ve boost ayarları, çeviri ayarları, **dinamik kategori keşfi (`dynamic_intent`) ayarları**, dönen kaynak alanlar, arayüz metinleri |
+| `config/search_config.json` | Index adları, timeout/limit değerleri, exact ASIN / phrase / multi-match / fuzzy / autocomplete alan ve boost ayarları, çeviri ayarları, **dinamik kategori keşfi (`dynamic_intent`) ayarları**, **sayfalama (`pagination`) ayarları**, dönen kaynak alanlar, arayüz metinleri |
 | `config/intent_rules.json` | **Opsiyonel override katmanı** (örn. `watch`): alias/tetikleyici terimler, dışlama koşulları, force-boost terimleri, negatif kategoriler (exclusion), rozet metni/ikonu, `priority`. Boş `{}` da geçerlidir — hiç kural olmadan da çalışır; ana kategori-intent motoru bu dosya DEĞİL, dinamik kategori keşfidir (aşağıya bakın). |
 | `config/query_translations.json` | Türkçe ifade/kelime → İngilizce karşılık sözlüğü. Boş `{}` da geçerlidir — çeviri sözlüğü olmadan uygulama, sorguyu değiştirmeden aramaya devam eder. |
 | `config/category_taxonomy.json` | `product_quality.py`nin kullandığı genel ürün-ailesi taksonomisi (12 aile: electronics, beauty, books, automotive, home&kitchen, clothing, toys, pet, grocery, sports, tools, office) — title/category terimleri, aliaslar, `conflicting_families`. |
@@ -107,6 +107,45 @@ asla bypass etmez, tek başına ürün döndürmez.
   elenir — override, keşfin üzerine biner, onu değiştirmez.
 - `intent_rules.json` tamamen `{}` olsa bile dinamik kategori keşfi normal
   şekilde çalışmaya devam eder (bkz. `tests/test_dynamic_category_discovery.py`).
+
+## Sayfalama (Pagination)
+
+Normal arama sonuçları basit, Elasticsearch-native `from + size` sayfalaması
+ile sunulur (`config/search_config.json:pagination`):
+
+```json
+"pagination": {
+  "enabled": true,
+  "page_size": 20,
+  "max_result_window": 10000,
+  "max_visible_pages": 7
+}
+```
+
+- `page_size` aktifken arama isteğinin `size`'ını belirler ve
+  `limits.result_size`'ın yerini alır — iki alan asla çelişmez, tek bir
+  öncelik kuralı vardır (`config.PaginationConfig`, `pagination.enabled=false`
+  iken `limits.result_size` geçerlidir).
+- **Erişilebilecek maksimum sayfa**: `max_result_window // page_size`
+  (varsayılan ayarlarla 10000 // 20 = **500. sayfa**). Elasticsearch'in
+  varsayılan `index.max_result_window` sınırı nedeniyle bu sınırın ötesine
+  `from + size` ile gidilemez; UI "Sonraki" butonunu bu sınırda otomatik
+  devre dışı bırakır ve toplam sonuç bundan fazla olsa bile kullanıcıya
+  "İlk 10.000 sonuç içinde sayfalama yapılabilir" bilgisini gösterir.
+  Manipüle edilmiş bir istekle (ör. doğrudan `search_products(page=...)`)
+  bu sınır aşılırsa Elasticsearch'e hiç istek atılmaz;
+  `app.PaginationLimitError` yakalanıp anlaşılır bir hataya çevrilir — bu bir
+  çökme değil, kontrollü bir sınırdır. İleride daha derin sayfalama gerekirse
+  `search_after` tabanlı imleçli sayfalamaya geçilebilir.
+- **Session state**: `current_page`, sorgu metni değiştiğinde (yeni yazım,
+  öneri seçimi, örnek sorgu seçimi) veya arama ayarları (phrase/multi-match/
+  fuzzy/exact ASIN switch'leri) değiştiğinde 1'e sıfırlanır; "Önceki"/"Sonraki"
+  butonları aynı sorgu ve aynı ayarlarla yalnızca sayfayı değiştirip aramayı
+  tekrar çalıştırır (bkz. `app._resolve_page_for_new_search`).
+- Autocomplete (canlı öneriler) sayfalama kullanmaz — her zaman ilk
+  `autocomplete_fetch_size` sonucu getirir, sorgusunda `from` hiç yer almaz.
+- İlk sürümde yalnızca Önceki/Sonraki butonları vardır; numaralı sayfa
+  butonları (`max_visible_pages`) sonraki bir iterasyona bırakılmıştır.
 
 ## Ürün veri kalitesi / title-category tutarlılığı (`product_quality.py`)
 
@@ -185,7 +224,10 @@ ve eşikler `config/quality_config.json`dan gelir.
   enjekte edilir (`intent_boost_queries`/`intent_exclusions`). Gerçek ağ
   çağrısını içeren orkestrasyon `search_products` içindedir. Bu ayrım,
   `build_search_query`'nin testlerde canlı cluster'a istek atmadan doğrudan
-  çağrılabilmesini sağlar.
+  çağrılabilmesini sağlar. `search_products`, sayfalama metadata'sı içeren
+  bir `SearchResult` (`hits`/`total`/`error`/`current_page`/`page_size`/
+  `total_pages`/`start_item`/`end_item`/`has_previous`/`has_next`) döner
+  (bkz. yukarıdaki "Sayfalama" bölümü).
 - **`config.py`** — config dosyalarının yükleme/doğrulama katmanı
   (`quality_ranking` dahil).
 - **`product_quality.py`** — ürün veri kalitesi / title-category tutarlılığı

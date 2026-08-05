@@ -230,6 +230,34 @@ class QualityRankingConfig:
 
 
 @dataclass(frozen=True)
+class PaginationConfig:
+    """Basit `from + size` tabanlı sayfalama ayarları.
+
+    `page_size`, pagination aktifken arama isteğinin `size` değerini
+    belirler ve bu durumda `limits.result_size`'ın yerini alır (result_size
+    yalnızca `enabled=false` iken kullanılır) — bu öncelik kuralı sayesinde
+    iki alan asla birbiriyle çelişmez, her zaman tek bir değer geçerlidir
+    (bkz. app.py: build_search_query).
+
+    Elasticsearch'in varsayılan `index.max_result_window` sınırı nedeniyle
+    `from + size`, `max_result_window`'ı aşamaz; aşan istekler Elasticsearch'e
+    hiç gönderilmez (bkz. app.py: PaginationLimitError). İleride bu sınırın
+    ötesine geçmek gerekirse `search_after` tabanlı imleçli sayfalamaya
+    geçilebilir.
+    """
+
+    enabled: bool
+    page_size: int
+    max_result_window: int
+    max_visible_pages: int
+
+    @property
+    def max_allowed_page(self) -> int:
+        """`max_result_window` içinde erişilebilecek son sayfa numarası."""
+        return max(1, self.max_result_window // self.page_size)
+
+
+@dataclass(frozen=True)
 class SourceFieldsConfig:
     search: tuple[str, ...]
     suggestions: tuple[str, ...]
@@ -270,6 +298,7 @@ class AppConfig:
     translation: TranslationConfig
     dynamic_intent: DynamicIntentConfig
     quality_ranking: QualityRankingConfig
+    pagination: PaginationConfig
     source_fields: SourceFieldsConfig
     ui: UIConfig
     product_url_template: str
@@ -396,6 +425,27 @@ def _build_quality_ranking(raw: Any, context: str) -> QualityRankingConfig:
     )
 
 
+def _build_pagination(raw: Any, context: str) -> PaginationConfig:
+    raw = _require_dict(raw, context)
+    page_size = _require_positive_int(raw.get("page_size"), f"{context}.page_size")
+    max_result_window = _require_positive_int(
+        raw.get("max_result_window"), f"{context}.max_result_window"
+    )
+    if max_result_window < page_size:
+        raise ConfigError(
+            f"{context}.max_result_window ({max_result_window}), "
+            f"page_size'dan ({page_size}) küçük olamaz."
+        )
+    return PaginationConfig(
+        enabled=_require_bool(raw.get("enabled"), f"{context}.enabled"),
+        page_size=page_size,
+        max_result_window=max_result_window,
+        max_visible_pages=_require_positive_int(
+            raw.get("max_visible_pages"), f"{context}.max_visible_pages"
+        ),
+    )
+
+
 def _build_fuzzy(raw: Any, context: str) -> MultiFieldQueryConfig:
     raw = _require_dict(raw, context)
     return MultiFieldQueryConfig(
@@ -506,6 +556,7 @@ def load_search_config(path: Path = SEARCH_CONFIG_PATH) -> AppConfig:
 
     dynamic_intent = _build_dynamic_intent(raw.get("dynamic_intent"), "dynamic_intent")
     quality_ranking = _build_quality_ranking(raw.get("quality_ranking"), "quality_ranking")
+    pagination = _build_pagination(raw.get("pagination"), "pagination")
 
     source_fields_raw = _require_dict(raw.get("source_fields"), "source_fields")
     source_fields = SourceFieldsConfig(
@@ -539,6 +590,7 @@ def load_search_config(path: Path = SEARCH_CONFIG_PATH) -> AppConfig:
         translation=translation,
         dynamic_intent=dynamic_intent,
         quality_ranking=quality_ranking,
+        pagination=pagination,
         source_fields=source_fields,
         ui=ui,
         product_url_template=product_url_template,

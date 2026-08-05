@@ -13,6 +13,12 @@
     "autocomplete_min_chars": 3,
     "autocomplete_cache_ttl_seconds": 30
   },
+  "pagination": {
+    "enabled": true,
+    "page_size": 20,
+    "max_result_window": 10000,
+    "max_visible_pages": 7
+  },
   "search_methods": {
     "exact_asin": { "field": "parent_asin", "boost": 25 },
     "phrase": { "field": "title", "boost": 10 },
@@ -139,7 +145,9 @@
       "method_fuzzy": "Yazım hatası toleransı",
       "method_exact_asin": "ASIN önceliği",
       "empty_state_icon": "🔍",
-      "empty_state_text": "Bir ürün adı yazın ya da örneklerden birini deneyin"
+      "empty_state_text": "Bir ürün adı yazın ya da örneklerden birini deneyin",
+      "pagination_prev_button": "← Önceki",
+      "pagination_next_button": "Sonraki →"
     },
     "help_text": {
       "toggle_phrase": "Kelimelerin başlıktaki sırasını ödüllendirir.",
@@ -168,7 +176,11 @@
       "score_disclaimer_caption": "Skor, Elasticsearch relevance değeridir; olasılık yüzdesi değildir.",
       "result_header_query": "\"{query}\" için {total:,} sonuç",
       "result_header_meta": "İlk {shown} sonuç gösteriliyor · Aktif yöntemler: {methods}",
-      "system_status_caption": "Elasticsearch: {status}  \n Aranan index sayısı: {index_count}  \n Sonuç limiti: {result_size}  \n Öneri limiti: {suggestion_limit}"
+      "system_status_caption": "Elasticsearch: {status}  \n Aranan index sayısı: {index_count}  \n Sonuç limiti: {result_size}  \n Öneri limiti: {suggestion_limit}",
+      "pagination_range_indicator": "{start}–{end} arası gösteriliyor",
+      "pagination_page_indicator": "Sayfa {current_page} / {total_pages}",
+      "pagination_window_notice": "İlk {max_result_window:,} sonuç içinde sayfalama yapılabilir.",
+      "pagination_limit_error": "Bu sayfaya ulaşılamıyor: Elasticsearch yalnızca ilk {max_result_window:,} sonuç içinde sayfalamaya izin verir (maksimum sayfa: {max_page})."
     }
   }
 }

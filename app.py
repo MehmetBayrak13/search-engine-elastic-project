@@ -22,6 +22,7 @@ gelir; hiçbir zaman config dosyalarına yazılmaz.
 import html
 import os
 import re
+from dataclasses import dataclass
 
 import requests
 import streamlit as st
@@ -744,6 +745,30 @@ def _apply_quality_ranking(base_query: dict, *, query_text: str, enable_exact_as
 # ---------------------------------------------------------------------------
 # Sorgu oluşturma (normal arama)
 # ---------------------------------------------------------------------------
+class PaginationLimitError(Exception):
+    """`from + size`, `pagination.max_result_window`'ı aştığında
+    `build_search_query` tarafından fırlatılır — Elasticsearch'in varsayılan
+    `index.max_result_window` sınırı nedeniyle bu istek hiç gönderilmez.
+    `search_products` bunu yakalayıp kullanıcıya anlaşılır bir mesaja çevirir
+    (bkz. CONFIG.ui.messages.pagination_limit_error). İleride bu sınırın
+    ötesine geçmek gerekirse `search_after` tabanlı imleçli sayfalamaya
+    geçilebilir; o zamana kadar derin sayfalama bilinçli olarak engellenir."""
+
+    def __init__(self, requested_page: int, max_allowed_page: int):
+        self.requested_page = requested_page
+        self.max_allowed_page = max_allowed_page
+        super().__init__(
+            f"page {requested_page} sınırı aşıyor (maksimum sayfa: {max_allowed_page})"
+        )
+
+
+def _normalize_page(page: int) -> int:
+    """`page < 1` girişini 1'e normalize eder (validation error fırlatmak
+    yerine — diğer opsiyonel sistemlerle tutarlı 'fail safely' yaklaşımı,
+    bkz. CLAUDE.md §21)."""
+    return page if page >= 1 else 1
+
+
 def build_search_query(
     query_text: str,
     enable_phrase: bool = True,
@@ -751,6 +776,8 @@ def build_search_query(
     enable_fuzzy: bool = True,
     enable_exact_asin: bool = True,
     result_size: int | None = None,
+    page: int = 1,
+    page_size: int | None = None,
     track_total_hits: bool | None = None,
     apply_intent_reranking: bool = True,
     intent_boost_queries: list[dict] | None = None,
@@ -784,12 +811,32 @@ def build_search_query(
     Böylece kategori boostları tek başına belge döndürmez; ürün önce lexical
     (veya çevrilmiş bir lexical alternatif) olarak eşleşmek zorundadır.
     Hiç lexical yöntem yoksa `match_none` döner.
+
+    Sayfalama (`from + size`):
+      `pagination.enabled` iken `page`/`page_size` (page_size verilmezse
+      `pagination.page_size`) `from`/`size` değerlerini belirler ve
+      `result_size` parametresi YOK SAYILIR — iki alan asla çelişmez, tek
+      bir öncelik kuralı vardır (bkz. config.PaginationConfig). Devre dışıyken
+      davranış değişmez: `result_size` (veya `limits.result_size`) tek
+      başına `size`'ı belirler, `from` payload'a hiç eklenmez.
+      `from + size`, `pagination.max_result_window`'ı aşarsa
+      `PaginationLimitError` fırlatılır — sorgu hiç oluşturulmaz.
     """
     methods = CONFIG.search_methods
-    result_size = result_size if result_size is not None else CONFIG.limits.result_size
+    pagination = CONFIG.pagination
     track_total_hits = (
         track_total_hits if track_total_hits is not None else CONFIG.elasticsearch.track_total_hits
     )
+
+    normalized_page = _normalize_page(page)
+    if pagination.enabled:
+        size = page_size if page_size is not None else pagination.page_size
+        from_ = (normalized_page - 1) * size
+        if from_ + size > pagination.max_result_window:
+            raise PaginationLimitError(normalized_page, pagination.max_allowed_page)
+    else:
+        size = result_size if result_size is not None else CONFIG.limits.result_size
+        from_ = None
 
     lexical_queries = []
 
@@ -844,12 +891,15 @@ def build_search_query(
 
     # Hiç lexical yöntem yoksa güvenlik ağı.
     if not lexical_queries:
-        return {
-            "size": result_size,
+        payload = {
+            "size": size,
             "track_total_hits": track_total_hits,
             "_source": SOURCE_FIELDS,
             "query": {"match_none": {}},
         }
+        if from_ is not None:
+            payload["from"] = from_
+        return payload
 
     # Çeviri sözlüğünden gelen alternatifler zorunlu eşleşme grubuna eklenir
     # (bypass etmez — ek bir "veya" seçeneğidir).
@@ -887,12 +937,15 @@ def build_search_query(
         {"bool": bool_query}, query_text=query_text, enable_exact_asin=enable_exact_asin
     )
 
-    return {
-        "size": result_size,
+    payload = {
+        "size": size,
         "track_total_hits": track_total_hits,
         "_source": SOURCE_FIELDS,
         "query": final_query,
     }
+    if from_ is not None:
+        payload["from"] = from_
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -955,13 +1008,32 @@ def _post_search(payload: dict, timeout: int = 20, index: str = None):
         return None, CONFIG.ui.message("response_decode_error")
 
 
+@dataclass
+class SearchResult:
+    """`search_products`ın dönüşü. `hits`/`total`/`error` eski 3-tuple ile
+    aynı anlamı taşır (hata varsa `hits` None); geri kalan alanlar sayfalama
+    metadata'sıdır (bkz. CLAUDE.md görev tanımı §3)."""
+
+    hits: list[dict] | None
+    total: int
+    error: str | None
+    current_page: int
+    page_size: int
+    total_pages: int
+    start_item: int
+    end_item: int
+    has_previous: bool
+    has_next: bool
+
+
 def search_products(
     query_text: str,
     enable_phrase: bool = True,
     enable_multi_match: bool = True,
     enable_fuzzy: bool = True,
     enable_exact_asin: bool = True,
-):
+    page: int = 1,
+) -> SearchResult:
     """
     Seçili yöntemlerle üretilen gelişmiş sorguyu Elastic Cloud'a gönderir.
 
@@ -972,31 +1044,90 @@ def search_products(
     başarısız olursa (bkz. discover_category_intent) sessizce boş liste
     döner; bu, ana ürün aramasını asla engellemez.
 
-    Dönüş: (hits_listesi, toplam_sonuc, hata_mesaji)
-    Hata varsa hits_listesi None döner.
+    Sayfalama: `page` (1-tabanlı), `pagination.enabled` iken
+    `build_search_query`'ye aktarılır. `from + size`,
+    `pagination.max_result_window`'ı aşarsa (`PaginationLimitError`)
+    Elasticsearch'e hiç istek atılmaz; kullanıcıya anlaşılır bir mesajla
+    (`pagination_limit_error`) `SearchResult(error=...)` döner — bu bir
+    çökme değil, kontrollü bir sınırdır.
+
+    Dönüş: `SearchResult`. Hata varsa `hits` None döner.
     """
+    pagination = CONFIG.pagination
+    normalized_page = _normalize_page(page)
+    page_size = pagination.page_size if pagination.enabled else CONFIG.limits.result_size
+
     intent_boost_queries, intent_exclusions = resolve_intent_signals(
         query_text, include_dynamic=True
     )
-    payload = build_search_query(
-        query_text,
-        enable_phrase=enable_phrase,
-        enable_multi_match=enable_multi_match,
-        enable_fuzzy=enable_fuzzy,
-        enable_exact_asin=enable_exact_asin,
-        result_size=RESULT_SIZE,
-        track_total_hits=True,
-        intent_boost_queries=intent_boost_queries,
-        intent_exclusions=intent_exclusions,
-    )
+    try:
+        payload = build_search_query(
+            query_text,
+            enable_phrase=enable_phrase,
+            enable_multi_match=enable_multi_match,
+            enable_fuzzy=enable_fuzzy,
+            enable_exact_asin=enable_exact_asin,
+            result_size=RESULT_SIZE,
+            page=normalized_page,
+            track_total_hits=True,
+            intent_boost_queries=intent_boost_queries,
+            intent_exclusions=intent_exclusions,
+        )
+    except PaginationLimitError as limit_error:
+        message = CONFIG.ui.message(
+            "pagination_limit_error",
+            max_result_window=pagination.max_result_window,
+            max_page=limit_error.max_allowed_page,
+        )
+        return SearchResult(
+            hits=None,
+            total=0,
+            error=message,
+            current_page=normalized_page,
+            page_size=page_size,
+            total_pages=limit_error.max_allowed_page,
+            start_item=0,
+            end_item=0,
+            has_previous=normalized_page > 1,
+            has_next=False,
+        )
 
     data, error = _post_search(payload, timeout=CONFIG.elasticsearch.search_timeout_seconds)
     if error:
-        return None, 0, error
+        return SearchResult(
+            hits=None,
+            total=0,
+            error=error,
+            current_page=normalized_page,
+            page_size=page_size,
+            total_pages=0,
+            start_item=0,
+            end_item=0,
+            has_previous=normalized_page > 1,
+            has_next=False,
+        )
 
     hits = data.get("hits", {}).get("hits", [])
     total = data.get("hits", {}).get("total", {}).get("value", len(hits))
-    return hits, total, None
+
+    total_pages = (total + page_size - 1) // page_size if total > 0 else 0
+    if pagination.enabled and total_pages:
+        total_pages = min(total_pages, pagination.max_allowed_page)
+    start_item = (normalized_page - 1) * page_size + 1 if hits else 0
+    end_item = start_item + len(hits) - 1 if hits else 0
+
+    return SearchResult(
+        hits=hits,
+        total=total,
+        error=None,
+        current_page=normalized_page,
+        page_size=page_size,
+        total_pages=total_pages,
+        start_item=start_item,
+        end_item=end_item,
+        has_previous=normalized_page > 1,
+        has_next=normalized_page < total_pages,
+    )
 
 
 @st.cache_data(ttl=_AUTOCOMPLETE_CACHE_TTL, show_spinner=False)
@@ -1482,6 +1613,82 @@ def render_result_header(query_text, total, shown, flags, intent_name):
     )
 
 
+def render_pagination_bar(position: str):
+    """
+    Sayfalama bilgisini (aralık + sayfa göstergesi) ve Önceki/Sonraki
+    butonlarını çizer. Yalnızca saklı arama sonucu metadata'sını
+    (`st.session_state`, `search_products` tarafından doldurulur) okur —
+    kendi başına arama tetiklemez. `position` aynı fonksiyonun sonuçların
+    hem üstünde hem altında çağrılabilmesi için Streamlit widget key'lerini
+    benzersizleştirir.
+
+    Pagination devre dışıysa veya tek sayfa varsa hiçbir şey çizmez (bkz.
+    CLAUDE.md görev tanımı §4/§6).
+    """
+    if not CONFIG.pagination.enabled:
+        return
+    total_pages = st.session_state.get("search_total_pages", 0)
+    if total_pages <= 1:
+        return
+
+    ui = CONFIG.ui
+    current_page = st.session_state.get("current_page", 1)
+    start_item = st.session_state.get("search_start_item", 0)
+    end_item = st.session_state.get("search_end_item", 0)
+    has_previous = st.session_state.get("search_has_previous", False)
+    has_next = st.session_state.get("search_has_next", False)
+
+    st.caption(ui.message("pagination_range_indicator", start=start_item, end=end_item))
+    st.caption(
+        ui.message("pagination_page_indicator", current_page=current_page, total_pages=total_pages)
+    )
+
+    col_prev, col_next = st.columns(2)
+    with col_prev:
+        if st.button(
+            ui.label("pagination_prev_button", "← Önceki"),
+            key=f"pg_prev_{position}",
+            disabled=not has_previous,
+            use_container_width=True,
+        ):
+            st.session_state["current_page"] = _previous_page(current_page)
+            st.session_state["run_search"] = True
+            st.session_state["scroll_to_top_once"] = True
+            st.rerun()
+    with col_next:
+        if st.button(
+            ui.label("pagination_next_button", "Sonraki →"),
+            key=f"pg_next_{position}",
+            disabled=not has_next,
+            use_container_width=True,
+        ):
+            st.session_state["current_page"] = _next_page(current_page)
+            st.session_state["run_search"] = True
+            st.session_state["scroll_to_top_once"] = True
+            st.rerun()
+
+    total = st.session_state.get("search_total", 0)
+    if total > CONFIG.pagination.max_result_window:
+        st.caption(
+            ui.message("pagination_window_notice", max_result_window=CONFIG.pagination.max_result_window)
+        )
+
+
+def _scroll_results_to_top():
+    """
+    Sayfa değişince sonuçların üstüne dönmeyi dener (best-effort — spec
+    'mümkünse' diyor). Ürün kartları zaten `st.iframe` içinde gömülü JS
+    çalıştırıyor (bkz. render_product_card); aynı mekanizma `window.parent`
+    üzerinden ana sayfa scroll'unu tetiklemeyi dener. Bazı tarayıcı/Streamlit
+    sürüm kombinasyonlarında sessizce çalışmayabilir — bu durumda hiçbir
+    hata üretmez, yalnızca sayfa üstte açılmaz.
+    """
+    st.iframe(
+        "<script>try{window.parent.scrollTo({top:0,behavior:'smooth'});}catch(e){}</script>",
+        height=0,
+    )
+
+
 def _select_query(new_value: str):
     """Bir başlık/örnek seçildiğinde inputu doldurup normal aramayı tetikler."""
     st.session_state["pending_value"] = new_value
@@ -1490,6 +1697,41 @@ def _select_query(new_value: str):
     )
     st.session_state["run_search"] = True
     st.session_state["hide_suggestions_once"] = True
+    # Yeni bir ürün/örnek seçimi her zaman sayfa 1'den başlar.
+    st.session_state["current_page"] = 1
+
+
+def _resolve_page_for_new_search(
+    previous_query: str | None, new_query: str, requested_page: int
+) -> int:
+    """
+    Bir arama tetiklendiğinde hangi sayfanın isteneceğine karar veren saf
+    fonksiyon (Elasticsearch'e istek atmaz, Streamlit'e bağımlı değildir).
+
+    Sorgu metni bir öncekinden FARKLIYSA (yeni yazılan sorgu, öneri seçimi,
+    örnek sorgu seçimi — hepsi query_text'i değiştirir) her zaman sayfa 1'e
+    döner. Aynı sorguyla tekrar arama (Önceki/Sonraki butonları query_text'i
+    DEĞİŞTİRMEZ) `requested_page`i korur; yalnızca `requested_page < 1` ise
+    1'e normalize edilir.
+    """
+    if new_query != previous_query:
+        return 1
+    return _normalize_page(requested_page)
+
+
+def _next_page(current_page: int) -> int:
+    return current_page + 1
+
+
+def _previous_page(current_page: int) -> int:
+    return max(1, current_page - 1)
+
+
+def _settings_changed(previous_sig: tuple | None, current_sig: tuple) -> bool:
+    """Sidebar arama yöntemi switch'lerinin bir önceki aramadan beri
+    değişip değişmediğini söyler; değiştiyse saklı sonuçlar bayat sayılır ve
+    sayfa 1'e sıfırlanır (bkz. main())."""
+    return previous_sig != current_sig
 
 
 def render_empty_state():
@@ -1561,6 +1803,7 @@ def main():
     # Session defaults
     st.session_state.setdefault("query_widget_version", 0)
     st.session_state.setdefault("run_search", False)
+    st.session_state.setdefault("current_page", 1)
 
     # Arama kutusu + Ara butonu. Widget key versiyonlanır ki öneri/örnek seçimi
     # inputu güvenle güncelleyebilsin (DuplicateWidgetID / state döngüsü olmadan).
@@ -1629,15 +1872,31 @@ def main():
             # yukarıda bağımsız çalışmaya devam eder.
             st.warning(ui.message("no_method_warning"))
         else:
+            # Sayfa değişmeden (Önceki/Sonraki) tekrar arama isteği geldiyse
+            # istenen sayfa korunur; sorgu metni değiştiyse (yeni yazım,
+            # öneri/örnek seçimi) her zaman sayfa 1'e dönülür.
+            previous_query = st.session_state.get("search_query")
+            page_to_fetch = _resolve_page_for_new_search(
+                previous_query, query_text, st.session_state.get("current_page", 1)
+            )
+            st.session_state["current_page"] = page_to_fetch
+
             with st.spinner("Ürünler aranıyor..."):
-                hits, total, error = search_products(query_text, **flags)
+                result = search_products(query_text, page=page_to_fetch, **flags)
             # Sonuçları sakla (rerun'larda kaybolmasın); ayar imzasını da tut.
             st.session_state["search_query"] = query_text
-            st.session_state["search_hits"] = hits
-            st.session_state["search_total"] = total
-            st.session_state["search_error"] = error
+            st.session_state["search_hits"] = result.hits
+            st.session_state["search_total"] = result.total
+            st.session_state["search_error"] = result.error
             st.session_state["search_sig"] = settings_sig
-            if not error and hits:
+            st.session_state["current_page"] = result.current_page
+            st.session_state["search_page_size"] = result.page_size
+            st.session_state["search_total_pages"] = result.total_pages
+            st.session_state["search_start_item"] = result.start_item
+            st.session_state["search_end_item"] = result.end_item
+            st.session_state["search_has_previous"] = result.has_previous
+            st.session_state["search_has_next"] = result.has_next
+            if not result.error and result.hits:
                 st.session_state["es_ok"] = True
 
     # -----------------------------------------------------------------------
@@ -1645,11 +1904,14 @@ def main():
     # sonucunu yeni ayarlar altında sessizce gösterme.
     # -----------------------------------------------------------------------
     has_stored = "search_hits" in st.session_state
-    if has_stored and st.session_state.get("search_sig") != settings_sig:
-        # Ayarlar değişti: bayat sonuçları temizle.
+    if has_stored and _settings_changed(st.session_state.get("search_sig"), settings_sig):
+        # Ayarlar değişti: bayat sonuçları temizle, sayfayı 1'e sıfırla.
         for k in ("search_hits", "search_total", "search_error",
-                  "search_query", "search_sig"):
+                  "search_query", "search_sig", "search_page_size",
+                  "search_total_pages", "search_start_item", "search_end_item",
+                  "search_has_previous", "search_has_next"):
             st.session_state.pop(k, None)
+        st.session_state["current_page"] = 1
         has_stored = False
         st.info(ui.message("settings_changed_info"))
 
@@ -1671,11 +1933,17 @@ def main():
         st.info(ui.message("no_results_info", query=stored_query))
         return
 
+    if st.session_state.pop("scroll_to_top_once", False):
+        _scroll_results_to_top()
+
     intent_name = detect_search_intent(stored_query).get("intent")
     render_result_header(stored_query, total, len(hits), flags, intent_name)
+    render_pagination_bar("top")
 
     for hit in hits:
         render_product_card(hit)
+
+    render_pagination_bar("bottom")
 
 
 if __name__ == "__main__":
