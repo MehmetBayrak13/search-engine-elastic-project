@@ -331,6 +331,47 @@ def test_exact_asin_quality_bypass_preserved_with_pagination():
         assert must_not, f"beklenen bypass must_not bulunamadı: {function}"
 
 
+# ---------------------------------------------------------------------------
+# Regresyon: _scroll_results_to_top() StreamlitInvalidHeightError üretmiyor
+# (bkz. production hatası: st.iframe(height=0), Streamlit 1.60'ta
+# StreamlitInvalidHeightError fırlatıyor)
+# ---------------------------------------------------------------------------
+
+def test_scroll_results_to_top_does_not_raise():
+    app._scroll_results_to_top()
+
+
+def test_scroll_results_to_top_no_longer_calls_iframe_with_invalid_height(monkeypatch):
+    calls = []
+    monkeypatch.setattr(app.st, "iframe", lambda *a, **k: calls.append((a, k)))
+    app._scroll_results_to_top()
+    assert calls == []
+
+
+def test_page_2_transition_still_flags_scroll_and_does_not_raise(monkeypatch):
+    # render_pagination_bar'daki "Sonraki" butonunun tetiklediği state
+    # değişikliğini simüle eder: sayfa artar, scroll_to_top_once set edilir,
+    # ardından tüketilen _scroll_results_to_top() hata üretmemeli.
+    monkeypatch.setattr(app.st, "session_state", {})
+    app.st.session_state["current_page"] = app._next_page(1)
+    app.st.session_state["scroll_to_top_once"] = True
+    assert app.st.session_state["current_page"] == 2
+    if app.st.session_state.pop("scroll_to_top_once", False):
+        app._scroll_results_to_top()
+
+
+def test_render_pagination_bar_renders_without_raising(monkeypatch):
+    monkeypatch.setattr(app.st, "session_state", {
+        "search_total_pages": 3,
+        "current_page": 2,
+        "search_start_item": 21,
+        "search_end_item": 40,
+        "search_has_previous": True,
+        "search_has_next": True,
+    })
+    app.render_pagination_bar("top")
+
+
 def test_exact_asin_page_2_returns_empty_hits_without_crash(monkeypatch):
     # Tek kayıt döndüren bir exact ASIN sorgusunda page=2 istemek (from=20)
     # Elasticsearch'ten boş hits ile total=1 döner; bu çökmemeli, tutarlı

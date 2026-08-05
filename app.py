@@ -1676,17 +1676,17 @@ def render_pagination_bar(position: str):
 
 def _scroll_results_to_top():
     """
-    Sayfa değişince sonuçların üstüne dönmeyi dener (best-effort — spec
-    'mümkünse' diyor). Ürün kartları zaten `st.iframe` içinde gömülü JS
-    çalıştırıyor (bkz. render_product_card); aynı mekanizma `window.parent`
-    üzerinden ana sayfa scroll'unu tetiklemeyi dener. Bazı tarayıcı/Streamlit
-    sürüm kombinasyonlarında sessizce çalışmayabilir — bu durumda hiçbir
-    hata üretmez, yalnızca sayfa üstte açılmaz.
+    No-op: sayfa değişince sonuçların üstüne kaydırma yalnızca görsel bir
+    kolaylıktı (pagination'ın çalışması için zorunlu değil). Önceki
+    implementasyon `st.iframe(..., height=0)` kullanıyordu; Streamlit 1.60
+    itibarıyla `st.iframe`, height için 0'ı reddedip
+    `StreamlitInvalidHeightError` fırlatıyor (height artık pozitif bir
+    int, "stretch" veya "content" olmalı) ve bu da sayfa 2'ye geçişte
+    production'da hataya yol açıyordu. Scroll efekti kritik olmadığından
+    JS çalıştırmayı tekrar denemek yerine bilinçli olarak devre dışı
+    bırakıldı.
     """
-    st.iframe(
-        "<script>try{window.parent.scrollTo({top:0,behavior:'smooth'});}catch(e){}</script>",
-        height=0,
-    )
+    return
 
 
 def _select_query(new_value: str):
