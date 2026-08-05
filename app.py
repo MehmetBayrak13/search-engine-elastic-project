@@ -22,6 +22,7 @@ gelir; hiçbir zaman config dosyalarına yazılmaz.
 import html
 import os
 import re
+import uuid
 from dataclasses import dataclass
 
 import requests
@@ -1261,6 +1262,11 @@ def render_product_card(hit: dict):
     <meta charset="utf-8">
     <style>
         * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+        /* İçerik satır sayısı aşağıdaki .product-title/.product-meta/.product-rating
+           kurallarıyla sabit satır yüksekliklerine kısıtlanıyor (bkz. card_height
+           hesaplaması); overflow:hidden burada gerçek taşmayı gizlemek için değil,
+           kısıtlamanın garanti altına alınması için bir güvenlik önlemi. */
+        html, body {{ overflow: hidden; }}
         body {{ background: transparent; font-family: -apple-system, BlinkMacSystemFont,
                 "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }}
 
@@ -1296,29 +1302,48 @@ def render_product_card(hit: dict):
         }}
 
         .product-info {{ flex: 1; min-width: 0; }}
-        /* Başlık düz koyu metin — link değil, alt çizgi/mavi renk YOK */
+        /* Başlık düz koyu metin — link değil, alt çizgi/mavi renk YOK.
+           Amazon başlıkları çoğu zaman çok uzun (100+ karakter); satır sayısı
+           2 ile sınırlanmazsa kart, sabit iframe yüksekliğini taşırıp dikey
+           scrollbar'a yol açıyordu (asıl kök neden). line-height px cinsinden
+           sabitlenip card_height hesaplamasıyla birebir eşleşiyor. */
         .product-title {{
             font-size: 1.05rem;
             font-weight: 600;
             color: #111827;
             margin-bottom: 8px;
-            line-height: 1.4;
+            line-height: 22px;
+            max-height: 44px;
             text-decoration: none;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            word-break: break-word;
         }}
         .product-meta {{
             color: #6b7280;
             font-size: 0.88rem;
+            line-height: 18px;
             margin-bottom: 4px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }}
         .product-rating {{
             color: #374151;
             font-size: 0.9rem;
+            line-height: 18px;
             margin-top: 6px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }}
         .product-price {{
             color: #059669;
             font-weight: 600;
             font-size: 0.95rem;
+            line-height: 18px;
             margin-top: 4px;
         }}
         .score-badge {{
@@ -1326,6 +1351,7 @@ def render_product_card(hit: dict):
             background: #f3f4f6;
             color: #4b5563;
             font-size: 0.78rem;
+            line-height: 16px;
             padding: 2px 10px;
             border-radius: 999px;
             margin-top: 8px;
@@ -1358,8 +1384,20 @@ def render_product_card(hit: dict):
     </html>
     """
 
-    # Kart yüksekliği: 140px görsel + iç boşluk + (varsa) fiyat satırı + kart altı boşluk.
-    card_height = 224 if price_html else 196
+    # Kart yüksekliği CSS'teki sabit line-height'larla birebir hesaplanıyor
+    # (bkz. .product-title/.product-meta/.product-rating/.score-badge):
+    #   padding (18*2)                       = 36
+    #   başlık (2 satır * 22px + 8px margin) = 52
+    #   mağaza + kategori (2 * (18+4)px)     = 44
+    #   değerlendirme (18 + 6px margin)      = 24
+    #   skor rozeti (16 + 4 padding + 8 margin) = 28
+    #   ---------------------------------------------
+    #   ara toplam                            = 184
+    #   + fiyat satırı (varsa, 18 + 4px margin) = 22
+    #   + tarayıcı/font metriği toleransı      = 16
+    # card container yüksekliği ile st.iframe(height=...) birebir eşleşmeli;
+    # aksi halde iframe kendi içinde dikey scrollbar gösterir.
+    card_height = 224 if price_html else 200
     # st.iframe: kart onclick/onkeydown JS'i ve <script> bloğu içeriyor, bu yüzden
     # st.html değil, JS çalıştırabilen iframe izolasyonu (st.iframe) kullanılıyor.
     st.iframe(card_html, height=card_height, width="stretch")
@@ -1401,6 +1439,7 @@ def _suggestion_visual_html(item: dict) -> tuple:
     <!DOCTYPE html>
     <html><head><meta charset="utf-8"><style>
         * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+        html, body {{ overflow: hidden; }}
         body {{ background: transparent; font-family: -apple-system, BlinkMacSystemFont,
                 "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }}
         .s-card {{
@@ -1418,7 +1457,10 @@ def _suggestion_visual_html(item: dict) -> tuple:
             display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical;
             overflow: hidden;
         }}
-        .s-metaline {{ font-size: 0.76rem; color: #6b7280; margin-top: 2px; }}
+        .s-metaline {{
+            font-size: 0.76rem; color: #6b7280; margin-top: 2px;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }}
         .s-price {{ color: #059669; font-weight: 600; }}
         .s-rating {{ color: #374151; }}
         .s-score {{
@@ -1695,12 +1737,22 @@ def _scroll_results_to_top():
     1.60 itibarıyla `st.iframe` height için literal 0'ı reddedip
     `StreamlitInvalidHeightError` fırlatıyor (height artık pozitif bir int,
     "stretch" veya "content" olmalı). `height=1` gizli iframe hack'i de
-    kırılgan bir "sihirli sayı" olduğundan tercih edilmiyor.
+    kırılgan bir "sihirli sayı" olduğundan tercih edilmiyor. Bunun yerine
+    resmi olarak desteklenen `height="content"` kullanılır: gövde görünür
+    bir öğe içermediğinden Streamlit içeriği ölçüp iframe'i kendiliğinden
+    ~0 piksele indirir.
 
-    Bunun yerine resmi olarak desteklenen `height="content"` kullanılır:
-    gövde görünür bir öğe içermediğinden (yalnızca `<script>`) Streamlit
-    içeriği ölçüp iframe'i kendiliğinden ~0 piksele indirir — literal 0/1
-    yazmadan aynı "görünmez" etkiyi verir.
+    `height=0` sorunu düzeltildikten SONRA canlıda hâlâ güvenilmez kalmasının
+    kök nedeni farklıydı: sayfa 2 -> 3 gibi ardışık geçişlerde üretilen
+    `scroll_html` metni bayt bayt AYNIYDI (yalnızca sabit anchor id'sini
+    içeriyordu). Streamlit'in frontend'i bir bileşenin prop'ları önceki
+    render'dan değişmediğinde DOM düğümünü yeniden kullanır; iframe'in
+    `srcdoc`'u değişmeyince tarayıcı belgeyi yeniden yüklemiyor, dolayısıyla
+    içindeki `<script>` yalnızca İLK sayfa geçişinde çalışıp sonraki
+    geçişlerde hiç tetiklenmiyordu. Çözüm: her çağrıda benzersiz bir `uuid4`
+    nonce'u HTML yorumu olarak gövdeye ekleyerek `srcdoc`'u her seferinde
+    farklılaştırmak — bu, tarayıcıyı iframe'i yeniden yüklemeye ve script'i
+    yeniden çalıştırmaya zorluyor.
 
     `st.html` burada kullanılmaz çünkü bu kod tabanında zaten belgelendiği
     gibi (bkz. render_product_card) `st.html` varsayılan olarak gömülü
@@ -1710,26 +1762,58 @@ def _scroll_results_to_top():
     `window.parent.document` üzerinden ana sayfadaki anchor'ı bulup
     kaydırabilir.
 
+    Anchor, `render_result_header` tarafından bu fonksiyondan HEMEN önce
+    çizilir (bkz. `main()` çağrı sırası) ama Streamlit'in frontend'de asıl
+    DOM'a commit etmesi ile bu iframe'in yüklenip script'inin çalışması
+    arasında yine de bir yarış durumu olabilir; bu yüzden script anchor'ı
+    tek seferde değil, `requestAnimationFrame` ile sınırlı sayıda yeniden
+    deneyerek arar.
+
+    `window.parent.document` erişimi (ör. farklı origin/sandbox kısıtlaması)
+    başarısız olursa script bunu try/catch ile tespit edip sessizce vazgeçer.
+
     Scroll kritik olmadığından ve bir tarayıcı/render hatası pagination
     akışını asla kesmemesi gerektiğinden, component render'ı sırasında
     oluşabilecek HERHANGİ bir hata burada yutulur.
     """
     try:
+        nonce = uuid.uuid4().hex
         scroll_html = f"""
         <html>
-        <head><style>html, body {{ margin: 0; padding: 0; }}</style></head>
+        <head><style>html, body {{ margin: 0; padding: 0; overflow: hidden; }}</style></head>
         <body>
+        <!-- nonce:{nonce} — srcdoc'u her çağrıda farklılaştırıp yeniden
+             yüklemeyi zorlamak için; içerik olarak bir anlamı yok. -->
         <script>
         (function() {{
-            try {{
-                var parentDoc = window.parent && window.parent.document;
+            var MAX_ATTEMPTS = 30;
+            var attempts = 0;
+
+            function tryScroll() {{
+                attempts += 1;
+                var parentDoc;
+                try {{
+                    parentDoc = window.parent && window.parent.document;
+                }} catch (err) {{
+                    // window.parent erişimi engellenmiş (ör. farklı origin) —
+                    // sessizce vazgeç, pagination'ı etkileme.
+                    return;
+                }}
                 if (!parentDoc) {{
                     return;
                 }}
                 var anchor = parentDoc.getElementById("{_RESULTS_TOP_ANCHOR_ID}");
                 if (anchor) {{
-                    anchor.scrollIntoView({{behavior: "auto", block: "start"}});
+                    anchor.scrollIntoView({{behavior: "smooth", block: "start"}});
+                    return;
                 }}
+                if (attempts < MAX_ATTEMPTS) {{
+                    window.requestAnimationFrame(tryScroll);
+                }}
+            }}
+
+            try {{
+                window.requestAnimationFrame(tryScroll);
             }} catch (err) {{
                 // Best-effort: tarayıcı tarafında scroll başarısız olursa
                 // sessizce yut, pagination'ı etkilemesin.
