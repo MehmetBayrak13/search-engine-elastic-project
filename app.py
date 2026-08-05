@@ -1584,8 +1584,16 @@ def render_hero():
     )
 
 
+_RESULTS_TOP_ANCHOR_ID = "search-results-top-anchor"
+
+
 def render_result_header(query_text, total, shown, flags, intent_name):
-    """Sonuçların üzerinde sorgu, toplam/gösterilen sayı, yöntemler ve intent."""
+    """Sonuçların üzerinde sorgu, toplam/gösterilen sayı, yöntemler ve intent.
+
+    Ayrıca `_RESULTS_TOP_ANCHOR_ID` kimlikli görünmez bir anchor div çizer;
+    sayfa değişiminde `_scroll_results_to_top()` viewport'u bu anchor'a
+    kaydırmayı dener (bkz. o fonksiyonun docstring'i).
+    """
     ui = CONFIG.ui
     e_query = html.escape(query_text)
     methods = ", ".join(
@@ -1603,6 +1611,7 @@ def render_result_header(query_text, total, shown, flags, intent_name):
 
     st.markdown(
         f"""
+        <div id="{_RESULTS_TOP_ANCHOR_ID}"></div>
         <div class="result-header">
             <div class="rh-query">{query_line}</div>
             <div class="rh-meta">{meta_line}</div>
@@ -1618,9 +1627,10 @@ def render_pagination_bar(position: str):
     Sayfalama bilgisini (aralık + sayfa göstergesi) ve Önceki/Sonraki
     butonlarını çizer. Yalnızca saklı arama sonucu metadata'sını
     (`st.session_state`, `search_products` tarafından doldurulur) okur —
-    kendi başına arama tetiklemez. `position` aynı fonksiyonun sonuçların
-    hem üstünde hem altında çağrılabilmesi için Streamlit widget key'lerini
-    benzersizleştirir.
+    kendi başına arama tetiklemez. `main()` bu fonksiyonu artık yalnızca
+    sonuçların ALTINDA (`position="bottom"`) çağırır; `position` parametresi
+    Streamlit widget key'lerini benzersizleştirmek için ve fonksiyonun tek
+    başına (örn. testlerde) farklı konumlarla çağrılabilmesi için duruyor.
 
     Pagination devre dışıysa veya tek sayfa varsa hiçbir şey çizmez (bkz.
     CLAUDE.md görev tanımı §4/§6).
@@ -1676,17 +1686,64 @@ def render_pagination_bar(position: str):
 
 def _scroll_results_to_top():
     """
-    No-op: sayfa değişince sonuçların üstüne kaydırma yalnızca görsel bir
-    kolaylıktı (pagination'ın çalışması için zorunlu değil). Önceki
-    implementasyon `st.iframe(..., height=0)` kullanıyordu; Streamlit 1.60
-    itibarıyla `st.iframe`, height için 0'ı reddedip
-    `StreamlitInvalidHeightError` fırlatıyor (height artık pozitif bir
-    int, "stretch" veya "content" olmalı) ve bu da sayfa 2'ye geçişte
-    production'da hataya yol açıyordu. Scroll efekti kritik olmadığından
-    JS çalıştırmayı tekrar denemek yerine bilinçli olarak devre dışı
-    bırakıldı.
+    Sayfa değişince (Önceki/Sonraki) viewport'u `render_result_header`'ın
+    çizdiği `#_RESULTS_TOP_ANCHOR_ID` anchor'ına kaydırmayı best-effort dener.
+    Görsel bir kolaylıktır; pagination'ın kendisi (from/size, state) buna
+    bağımlı değildir.
+
+    Önceki implementasyon `st.iframe(..., height=0)` kullanıyordu; Streamlit
+    1.60 itibarıyla `st.iframe` height için literal 0'ı reddedip
+    `StreamlitInvalidHeightError` fırlatıyor (height artık pozitif bir int,
+    "stretch" veya "content" olmalı). `height=1` gizli iframe hack'i de
+    kırılgan bir "sihirli sayı" olduğundan tercih edilmiyor.
+
+    Bunun yerine resmi olarak desteklenen `height="content"` kullanılır:
+    gövde görünür bir öğe içermediğinden (yalnızca `<script>`) Streamlit
+    içeriği ölçüp iframe'i kendiliğinden ~0 piksele indirir — literal 0/1
+    yazmadan aynı "görünmez" etkiyi verir.
+
+    `st.html` burada kullanılmaz çünkü bu kod tabanında zaten belgelendiği
+    gibi (bkz. render_product_card) `st.html` varsayılan olarak gömülü
+    `<script>` çalıştırmaz. `st.iframe` ise JS çalıştırabilen, aynı-origin
+    izinli bir iframe sağlar (bkz. `st.iframe` docstring'indeki "same-origin
+    access to the Streamlit app" notu) — bu yüzden script içeriden
+    `window.parent.document` üzerinden ana sayfadaki anchor'ı bulup
+    kaydırabilir.
+
+    Scroll kritik olmadığından ve bir tarayıcı/render hatası pagination
+    akışını asla kesmemesi gerektiğinden, component render'ı sırasında
+    oluşabilecek HERHANGİ bir hata burada yutulur.
     """
-    return
+    try:
+        scroll_html = f"""
+        <html>
+        <head><style>html, body {{ margin: 0; padding: 0; }}</style></head>
+        <body>
+        <script>
+        (function() {{
+            try {{
+                var parentDoc = window.parent && window.parent.document;
+                if (!parentDoc) {{
+                    return;
+                }}
+                var anchor = parentDoc.getElementById("{_RESULTS_TOP_ANCHOR_ID}");
+                if (anchor) {{
+                    anchor.scrollIntoView({{behavior: "auto", block: "start"}});
+                }}
+            }} catch (err) {{
+                // Best-effort: tarayıcı tarafında scroll başarısız olursa
+                // sessizce yut, pagination'ı etkilemesin.
+            }}
+        }})();
+        </script>
+        </body>
+        </html>
+        """
+        st.iframe(scroll_html, height="content", width="stretch")
+    except Exception:
+        # Component render'ı başarısız olsa bile arama sonuçları normal
+        # şekilde gösterilmeye devam etmeli.
+        return
 
 
 def _select_query(new_value: str):
@@ -1933,16 +1990,21 @@ def main():
         st.info(ui.message("no_results_info", query=stored_query))
         return
 
-    if st.session_state.pop("scroll_to_top_once", False):
-        _scroll_results_to_top()
-
     intent_name = detect_search_intent(stored_query).get("intent")
     render_result_header(stored_query, total, len(hits), flags, intent_name)
-    render_pagination_bar("top")
+
+    # Anchor, render_result_header'ın çizdiği #_RESULTS_TOP_ANCHOR_ID
+    # div'i içeriyor; scroll tetiklemesi bu yüzden başlıktan SONRA gelir,
+    # aksi halde anchor DOM'a henüz eklenmeden scriptin çalışması riske girer.
+    if st.session_state.pop("scroll_to_top_once", False):
+        _scroll_results_to_top()
 
     for hit in hits:
         render_product_card(hit)
 
+    # Pagination kontrolü yalnızca sonuçların ALTINDA gösterilir (bkz.
+    # CLAUDE.md görev tanımı) — üstteki pagination render çağrısı kasıtlı
+    # olarak kaldırıldı.
     render_pagination_bar("bottom")
 
 

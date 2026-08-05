@@ -4,6 +4,8 @@ atılmaz — `app._post_search` mock'lanır (bkz. `_mock_post_search`).
 """
 
 import dataclasses
+import inspect
+import re
 
 import pytest
 
@@ -341,11 +343,37 @@ def test_scroll_results_to_top_does_not_raise():
     app._scroll_results_to_top()
 
 
-def test_scroll_results_to_top_no_longer_calls_iframe_with_invalid_height(monkeypatch):
+def test_scroll_results_to_top_does_not_use_invalid_height(monkeypatch):
+    # Önceki implementasyon st.iframe(..., height=0) kullanıyordu ve
+    # Streamlit 1.60'ta StreamlitInvalidHeightError'a yol açıyordu. Yeni
+    # implementasyon çağrı yapmalı ama height literal 0 ya da (tercih
+    # edilmeyen) 1 "sihirli sayısı" olmamalı.
     calls = []
     monkeypatch.setattr(app.st, "iframe", lambda *a, **k: calls.append((a, k)))
     app._scroll_results_to_top()
-    assert calls == []
+    assert len(calls) == 1
+    _, kwargs = calls[0]
+    height = kwargs.get("height")
+    assert height not in (0, 1)
+    assert height in ("content", "stretch") or (isinstance(height, int) and height > 0)
+
+
+def test_scroll_results_to_top_targets_result_header_anchor(monkeypatch):
+    calls = []
+    monkeypatch.setattr(app.st, "iframe", lambda *a, **k: calls.append((a, k)))
+    app._scroll_results_to_top()
+    (html_arg,), _ = calls[0]
+    assert app._RESULTS_TOP_ANCHOR_ID in html_arg
+
+
+def test_scroll_results_to_top_swallows_iframe_exception(monkeypatch):
+    # Component render'ı (örn. tarayıcı/ortam kaynaklı) başarısız olsa bile
+    # pagination akışı kesilmemeli.
+    def boom(*args, **kwargs):
+        raise RuntimeError("component render failed")
+
+    monkeypatch.setattr(app.st, "iframe", boom)
+    app._scroll_results_to_top()  # exception fırlatmamalı
 
 
 def test_page_2_transition_still_flags_scroll_and_does_not_raise(monkeypatch):
@@ -360,6 +388,40 @@ def test_page_2_transition_still_flags_scroll_and_does_not_raise(monkeypatch):
         app._scroll_results_to_top()
 
 
+def test_render_pagination_bar_next_button_flags_scroll_to_top(monkeypatch):
+    # "Sonraki" butonuna basılınca sayfa ilerlemeli ve bir sonraki render'ın
+    # scroll tetiklemesi için scroll_to_top_once bayrağı set edilmeli.
+    monkeypatch.setattr(app.st, "session_state", {
+        "search_total_pages": 3,
+        "current_page": 1,
+        "search_start_item": 1,
+        "search_end_item": 20,
+        "search_has_previous": False,
+        "search_has_next": True,
+    })
+    monkeypatch.setattr(app.st, "button", lambda label, **k: "pg_next_" in k.get("key", ""))
+    monkeypatch.setattr(app.st, "rerun", lambda: None)
+    app.render_pagination_bar("bottom")
+    assert app.st.session_state.get("current_page") == 2
+    assert app.st.session_state.get("scroll_to_top_once") is True
+
+
+def test_render_pagination_bar_prev_button_flags_scroll_to_top(monkeypatch):
+    monkeypatch.setattr(app.st, "session_state", {
+        "search_total_pages": 3,
+        "current_page": 2,
+        "search_start_item": 21,
+        "search_end_item": 40,
+        "search_has_previous": True,
+        "search_has_next": True,
+    })
+    monkeypatch.setattr(app.st, "button", lambda label, **k: "pg_prev_" in k.get("key", ""))
+    monkeypatch.setattr(app.st, "rerun", lambda: None)
+    app.render_pagination_bar("bottom")
+    assert app.st.session_state.get("current_page") == 1
+    assert app.st.session_state.get("scroll_to_top_once") is True
+
+
 def test_render_pagination_bar_renders_without_raising(monkeypatch):
     monkeypatch.setattr(app.st, "session_state", {
         "search_total_pages": 3,
@@ -370,6 +432,34 @@ def test_render_pagination_bar_renders_without_raising(monkeypatch):
         "search_has_next": True,
     })
     app.render_pagination_bar("top")
+
+
+def test_render_result_header_emits_scroll_anchor(monkeypatch):
+    calls = []
+    monkeypatch.setattr(app.st, "markdown", lambda content, **k: calls.append(content))
+    app.render_result_header("kamera", 10, 10, {"enable_phrase": True}, None)
+    assert calls, "render_result_header hiç st.markdown çağırmadı"
+    assert f'id="{app._RESULTS_TOP_ANCHOR_ID}"' in calls[0]
+
+
+# ---------------------------------------------------------------------------
+# Regresyon: pagination kontrolü yalnızca sonuçların ALTINDA render ediliyor
+# (önceden main() aynı bar'ı hem üstte hem altta çiziyordu)
+# ---------------------------------------------------------------------------
+
+def test_main_renders_pagination_bar_exactly_once_at_bottom():
+    source = inspect.getsource(app.main)
+    positions = re.findall(r'render_pagination_bar\(\s*"([^"]+)"\s*\)', source)
+    assert positions == ["bottom"]
+
+
+def test_main_triggers_scroll_after_result_header_not_before():
+    # Anchor, render_result_header tarafından çizilir; scroll tetikleyicisi
+    # anchor DOM'a eklenmeden önce çalışmamalı.
+    source = inspect.getsource(app.main)
+    header_idx = source.index("render_result_header(")
+    scroll_idx = source.index("_scroll_results_to_top()")
+    assert header_idx < scroll_idx
 
 
 def test_exact_asin_page_2_returns_empty_hits_without_crash(monkeypatch):

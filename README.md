@@ -146,6 +146,15 @@ ile sunulur (`config/search_config.json:pagination`):
   `autocomplete_fetch_size` sonucu getirir, sorgusunda `from` hiç yer almaz.
 - İlk sürümde yalnızca Önceki/Sonraki butonları vardır; numaralı sayfa
   butonları (`max_visible_pages`) sonraki bir iterasyona bırakılmıştır.
+- Sayfalama kontrolü (aralık göstergesi + Önceki/Sonraki) yalnızca ürün
+  kartlarının ALTINDA render edilir; sonuç başlığı ve kartların üstünde
+  tekrar çizilmez (`app.render_pagination_bar`, `main()` içinde tek bir
+  çağrı — bkz. `app._RESULTS_TOP_ANCHOR_ID`). "Önceki"/"Sonraki" butonuna
+  basınca `st.iframe(..., height="content")` ile çalışan best-effort bir
+  scroll (`app._scroll_results_to_top`), viewport'u sonuç başlığının
+  üstündeki anchor'a kaydırmayı dener; bu tamamen görseldir, başarısız
+  olsa da (yakalanan herhangi bir hata sessizce yutulur) sayfalama normal
+  çalışmaya devam eder.
 
 ## Ürün veri kalitesi / title-category tutarlılığı (`product_quality.py`)
 
