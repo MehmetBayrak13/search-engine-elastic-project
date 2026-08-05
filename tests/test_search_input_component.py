@@ -151,3 +151,24 @@ def test_search_input_wrapper_has_no_business_logic():
     assert "search_service" not in source
     assert "autocomplete_service" not in source
     assert "_post_search" not in source
+
+
+def test_search_input_frontend_dir_resolves_regardless_of_cwd():
+    # `declare_component`'e verilen path, çalışma dizininden (os.getcwd())
+    # değil, __init__.py'nin kendi konumundan türetilmeli — aksi halde
+    # Streamlit Cloud'da farklı bir cwd'den başlatıldığında component
+    # frontend'i bulamaz ("having trouble loading" hatası).
+    import os
+
+    from components import search_input as search_input_pkg
+
+    frontend_dir = search_input_pkg._FRONTEND_DIR
+    assert frontend_dir.is_absolute()
+    assert (frontend_dir / "index.html").is_file()
+
+    cwd = os.getcwd()
+    try:
+        os.chdir(str(Path(__file__).resolve().parent))
+        assert (search_input_pkg._FRONTEND_DIR / "index.html").is_file()
+    finally:
+        os.chdir(cwd)

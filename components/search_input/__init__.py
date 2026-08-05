@@ -18,13 +18,20 @@ DEĞİL, çağıran `app.py`'yi kullanır — component servisleri doğrudan ça
 
 from __future__ import annotations
 
-import os
+from pathlib import Path
 from typing import Any
 
 import streamlit.components.v1 as components
 
-_FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "frontend")
-_component_func = components.declare_component("search_input", path=_FRONTEND_DIR)
+_COMPONENT_DIR = Path(__file__).resolve().parent
+_FRONTEND_DIR = _COMPONENT_DIR / "frontend"
+
+if not (_FRONTEND_DIR / "index.html").is_file():
+    raise FileNotFoundError(
+        f"Search input frontend missing: {_FRONTEND_DIR / 'index.html'}"
+    )
+
+_component_func = components.declare_component("search_input", path=str(_FRONTEND_DIR))
 
 
 def search_input(
