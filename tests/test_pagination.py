@@ -5,6 +5,7 @@ atılmaz — `app._post_search` mock'lanır (bkz. `_mock_post_search`).
 
 import dataclasses
 import inspect
+import json
 import re
 
 import pytest
@@ -474,3 +475,258 @@ def test_exact_asin_page_2_returns_empty_hits_without_crash(monkeypatch):
     assert result.error is None
     assert result.hits == []
     assert result.total == 1
+
+
+# ---------------------------------------------------------------------------
+# Regresyon: BUG 1 — aynı sorguda Ara'ya tekrar basınca sayfa 1'e resetlenmiyordu.
+#
+# Kök neden: Ara butonu yalnızca run_search=True set ediyordu, current_page'e
+# dokunmuyordu. _resolve_page_for_new_search sorgu metni AYNIYSA (Önceki/
+# Sonraki butonlarının doğru çalışması için KASITLI olarak) requested_page'i
+# koruyor; sorgu metni değişmediğinde (kullanıcı "gaming mouse"u sayfa 6'da
+# tekrar aratıyor) bu yüzden current_page (6) hiç değişmeden aynen geri
+# dönüyordu. Çözüm: her explicit search tetikleyicisi (_trigger_explicit_search)
+# current_page'i normal arama akışı çalışmadan ÖNCE 1'e sıfırlar.
+# ---------------------------------------------------------------------------
+
+def test_trigger_explicit_search_resets_page_to_one_and_sets_run_search(monkeypatch):
+    session_state = {"current_page": 6, "run_search": False}
+    monkeypatch.setattr(app.st, "session_state", session_state)
+    app._trigger_explicit_search()
+    assert session_state["current_page"] == 1
+    assert session_state["run_search"] is True
+
+
+def test_ara_button_same_query_page_six_resolves_to_page_one(monkeypatch):
+    """Test 1: aynı query, current_page=6, Ara click -> current_page 1, run_search True."""
+    session_state = {"current_page": 6, "run_search": False, "search_query": "gaming mouse"}
+    monkeypatch.setattr(app.st, "session_state", session_state)
+
+    # main()'deki Ara butonu tıklama dalının yaptığı TEK şey budur.
+    app._trigger_explicit_search()
+
+    assert session_state["current_page"] == 1
+    assert session_state["run_search"] is True
+
+    # Ardından triggered bloğunun sayfa çözümü de 1'i doğrulamalı (sorgu AYNI
+    # kalsa bile) — _resolve_page_for_new_search'ün "aynı sorguda korunacak
+    # requested_page" artık zaten 1'dir.
+    page_to_fetch = app._resolve_page_for_new_search(
+        session_state["search_query"], "gaming mouse", session_state["current_page"]
+    )
+    assert page_to_fetch == 1
+
+
+def test_ara_button_different_query_page_six_resolves_to_page_one_and_uses_new_query(monkeypatch):
+    """Test 2: farklı query, current_page=6, Ara click -> current_page 1, yeni query kullanılır."""
+    session_state = {"current_page": 6, "run_search": False, "search_query": "eski sorgu"}
+    monkeypatch.setattr(app.st, "session_state", session_state)
+
+    app._trigger_explicit_search()
+
+    assert session_state["current_page"] == 1
+    assert session_state["run_search"] is True
+
+    page_to_fetch = app._resolve_page_for_new_search(
+        session_state["search_query"], "yeni sorgu", session_state["current_page"]
+    )
+    assert page_to_fetch == 1
+
+
+def test_main_search_button_uses_trigger_explicit_search_helper():
+    # Ara butonu artık run_search'ü doğrudan set etmek yerine paylaşılan
+    # helper'ı çağırıyor (current_page resetini de garantiler).
+    source = inspect.getsource(app.main)
+    assert 'if st.button(search_button_label, type="primary", use_container_width=True):' in source
+    assert "_trigger_explicit_search()" in source
+
+
+# ---------------------------------------------------------------------------
+# Regresyon: BUG 2 — Enter ana aramayı çalıştırmıyordu.
+#
+# Kök neden: kurulu st_keyup sürümü (0.3.0 — PyPI'daki TEK/son sürüm de bu,
+# doğrulandı) `onkeyup`'ta HER tuş için (Enter dahil) birebir aynı şekilde
+# Streamlit.setComponentValue çağırır; Enter'ı diğer tuşlardan ayıran ayrı
+# bir event/callback yoktur. st_keyup çağrısına bir on_change bağlamak bu
+# yüzden Enter'ı DEĞİL, her tuş vuruşunun debounce sonrası tetiklediği HER
+# değişikliği yakalar — "yazarken ana aramayı otomatik tetikleme" kuralını
+# ihlal eder. st.form da çözüm değildir: input, st_keyup'ın KENDİ component
+# iframe'inin içindedir, ana sayfadaki bir <form>'un DOM ağacına hiç girmez.
+# Çözüm: gerçek `keydown`/Enter event'ini ayrı bir best-effort JS köprüsüyle
+# (_build_enter_key_bridge_html) doğrudan component'in iframe'i içindeki
+# input'a bağlayıp, Enter'da Ara butonunu programatik tıklatmak — böylece
+# Enter, Ara butonuyla AYNI state geçişini (_trigger_explicit_search) tetikler.
+# ---------------------------------------------------------------------------
+
+def test_keyup_path_never_wires_on_change_to_avoid_search_on_every_keystroke(monkeypatch):
+    """Test 4 (typing/autocomplete): st_keyup'a on_change bağlanmaz, yazma run_search'ü tetiklemez."""
+    monkeypatch.setattr(app, "HAS_KEYUP", True)
+    captured_kwargs = {}
+
+    def fake_st_keyup(*args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return kwargs.get("value", "")
+
+    monkeypatch.setattr(app, "st_keyup", fake_st_keyup)
+    session_state = {"run_search": False, "current_page": 1, "search_query": "eski sorgu"}
+    monkeypatch.setattr(app.st, "session_state", session_state)
+
+    app._make_search_input("search_box_v0", "gaming mo")
+
+    assert "on_change" not in captured_kwargs
+    assert session_state["run_search"] is False
+    assert session_state["current_page"] == 1
+    assert session_state["search_query"] == "eski sorgu"  # ana sonuç sorgusu değişmedi
+
+
+def test_fallback_text_input_on_change_uses_shared_explicit_search_trigger(monkeypatch):
+    """Test 3 (Enter, st_keyup yokken): native on_change zaten yalnızca Enter/blur'da
+    tetiklenir ve Ara butonuyla AYNI helper'a bağlıdır."""
+    monkeypatch.setattr(app, "HAS_KEYUP", False)
+    captured = {}
+
+    def fake_text_input(*args, **kwargs):
+        captured["on_change"] = kwargs.get("on_change")
+        return kwargs.get("value", "")
+
+    monkeypatch.setattr(app.st, "text_input", fake_text_input)
+    app._make_search_input("search_box_v0", "gaming mouse")
+    assert captured["on_change"] is app._trigger_explicit_search
+
+
+def test_enter_bridge_html_targets_enter_key_input_box_and_button_label():
+    html_src = app._build_enter_key_bridge_html("Ara")
+    assert "event.key !== 'Enter'" in html_src
+    assert "input_box" in html_src
+    assert json.dumps("Ara") in html_src
+    assert "button.click()" in html_src
+    assert "setComponentValue" in html_src
+
+
+def test_enter_bridge_flushes_debounced_value_before_clicking_button():
+    # Enter, henüz debounce süresi dolmamış son karakterleri kaçırmamalı:
+    # köprü değeri flush ettikten SONRA butona tıklamalı.
+    html_src = app._build_enter_key_bridge_html("Ara")
+    set_value_idx = html_src.index("setComponentValue")
+    click_idx = html_src.index("button.click()")
+    assert set_value_idx < click_idx
+
+
+def test_render_enter_to_search_bridge_noop_when_keyup_not_installed(monkeypatch):
+    monkeypatch.setattr(app, "HAS_KEYUP", False)
+    calls = []
+    monkeypatch.setattr(app.st, "iframe", lambda *a, **k: calls.append((a, k)))
+    app._render_enter_to_search_bridge("Ara")
+    assert calls == []
+
+
+def test_render_enter_to_search_bridge_renders_iframe_when_keyup_installed(monkeypatch):
+    monkeypatch.setattr(app, "HAS_KEYUP", True)
+    calls = []
+    monkeypatch.setattr(app.st, "iframe", lambda *a, **k: calls.append((a, k)))
+    app._render_enter_to_search_bridge("Ara")
+    assert len(calls) == 1
+    (html_arg,), kwargs = calls[0]
+    assert "input_box" in html_arg
+    height = kwargs.get("height")
+    assert height not in (0, 1)
+    assert height in ("content", "stretch") or (isinstance(height, int) and height > 0)
+
+
+def test_render_enter_to_search_bridge_swallows_exception(monkeypatch):
+    monkeypatch.setattr(app, "HAS_KEYUP", True)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("iframe render failed")
+
+    monkeypatch.setattr(app.st, "iframe", boom)
+    app._render_enter_to_search_bridge("Ara")  # exception fırlatmamalı
+
+
+def test_main_calls_enter_bridge_after_input_and_button_rendered():
+    source = inspect.getsource(app.main)
+    input_idx = source.index("_make_search_input(")
+    button_idx = source.index("_trigger_explicit_search()")
+    bridge_idx = source.index("_render_enter_to_search_bridge(")
+    assert input_idx < bridge_idx
+    assert button_idx < bridge_idx
+
+
+def test_main_only_runs_search_when_run_search_flag_true():
+    # Sadece yazma/autocomplete ana aramayı tetiklememeli: search_products
+    # çağrısı yalnızca `triggered` bloğunun İÇİNDE olmalı.
+    source = inspect.getsource(app.main)
+    assert 'triggered = st.session_state.get("run_search", False)' in source
+    triggered_idx = source.index("if triggered:")
+    search_call_idx = source.index("search_products(query_text")
+    assert triggered_idx < search_call_idx
+
+
+# ---------------------------------------------------------------------------
+# Explicit search tetikleyicileri: öneri seçimi ve örnek sorgu seçimi.
+# ---------------------------------------------------------------------------
+
+def test_select_query_resets_page_and_triggers_explicit_search(monkeypatch):
+    """Test 6/7: öneri veya örnek sorgu seçimi -> page 1, explicit search tetiklenir."""
+    session_state = {"current_page": 6, "run_search": False, "query_widget_version": 0}
+    monkeypatch.setattr(app.st, "session_state", session_state)
+
+    app._select_query("Wireless Gaming Mouse RGB")
+
+    assert session_state["current_page"] == 1
+    assert session_state["run_search"] is True
+    assert session_state["pending_value"] == "Wireless Gaming Mouse RGB"
+    assert session_state["hide_suggestions_once"] is True
+    assert session_state["query_widget_version"] == 1
+
+
+def test_suggestion_selection_uses_select_query_helper():
+    source = inspect.getsource(app.main)
+    assert '_select_query(item["title"])' in source
+
+
+def test_example_query_chip_uses_select_query_helper():
+    source = inspect.getsource(app.render_empty_state)
+    assert "_select_query(example)" in source
+
+
+# ---------------------------------------------------------------------------
+# Pagination butonları explicit search SAYILMAZ: sayfa değişir, sorgu aynı
+# kalır, current_page zorla 1'e resetlenmez.
+# ---------------------------------------------------------------------------
+
+def test_next_button_changes_page_without_explicit_search_reset(monkeypatch):
+    """Test 5: Next/Previous current_page'i değiştirir, query aynı kalır, reset uygulanmaz."""
+    session_state = {
+        "search_total_pages": 3,
+        "current_page": 2,
+        "search_start_item": 21,
+        "search_end_item": 40,
+        "search_has_previous": True,
+        "search_has_next": True,
+        "search_query": "gaming mouse",
+    }
+    monkeypatch.setattr(app.st, "session_state", session_state)
+    monkeypatch.setattr(app.st, "button", lambda label, **k: "pg_next_" in k.get("key", ""))
+    monkeypatch.setattr(app.st, "rerun", lambda: None)
+    app.render_pagination_bar("bottom")
+    assert session_state["current_page"] == 3  # 2 -> 3, 1'e SIFIRLANMADI
+    assert session_state["search_query"] == "gaming mouse"  # sorgu değişmedi
+
+
+def test_previous_button_changes_page_without_explicit_search_reset(monkeypatch):
+    session_state = {
+        "search_total_pages": 3,
+        "current_page": 3,
+        "search_start_item": 41,
+        "search_end_item": 45,
+        "search_has_previous": True,
+        "search_has_next": False,
+        "search_query": "gaming mouse",
+    }
+    monkeypatch.setattr(app.st, "session_state", session_state)
+    monkeypatch.setattr(app.st, "button", lambda label, **k: "pg_prev_" in k.get("key", ""))
+    monkeypatch.setattr(app.st, "rerun", lambda: None)
+    app.render_pagination_bar("bottom")
+    assert session_state["current_page"] == 2  # 3 -> 2, 1'e SIFIRLANMADI
+    assert session_state["search_query"] == "gaming mouse"

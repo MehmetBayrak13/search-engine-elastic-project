@@ -20,6 +20,7 @@ gelir; hiçbir zaman config dosyalarına yazılmaz.
 """
 
 import html
+import json
 import os
 import re
 import uuid
@@ -1830,16 +1831,39 @@ def _scroll_results_to_top():
         return
 
 
+def _trigger_explicit_search():
+    """
+    "Explicit search" tetikleyicilerinin (Ara butonu, Enter, öneri seçimi,
+    örnek sorgu seçimi) PAYLAŞTIĞI tek state geçişi.
+
+    KÖK NEDEN (Bug 1 — aynı sorguda Ara'ya basınca sayfa resetlenmiyordu):
+    `_resolve_page_for_new_search`, sorgu metni bir öncekiyle AYNIYSA
+    `requested_page`i korur — bu, Önceki/Sonraki butonlarının (query_text
+    değişmeden `current_page`i hedef sayfaya set edip aramayı tekrar
+    çalıştırması) doğru çalışması için KASITLIDIR. Eskiden Ara butonu bu
+    fonksiyonu çağırmadan yalnızca `run_search=True` set ediyordu; sorgu
+    metni değişmediğinde (kullanıcı aynı sorguyu tekrar aratıyor) bu yüzden
+    `current_page` neyse (ör. 6) o kalıyor ve `_resolve_page_for_new_search`
+    onu "korunacak requested_page" sanıp aynen geri veriyordu.
+
+    Çözüm: her explicit search, `current_page`i normal arama akışı
+    ÇALIŞMADAN ÖNCE 1'e sıfırlar. Böylece `_resolve_page_for_new_search`
+    aynı sorgu için bile zaten 1 olan `requested_page`i normalize edip 1
+    döner — fonksiyonun kendi "aynı sorguda sayfayı koru" davranışına
+    dokunulmadan (Önceki/Sonraki hâlâ doğru çalışır) sonuç doğru olur.
+    """
+    st.session_state["current_page"] = 1
+    st.session_state["run_search"] = True
+
+
 def _select_query(new_value: str):
     """Bir başlık/örnek seçildiğinde inputu doldurup normal aramayı tetikler."""
     st.session_state["pending_value"] = new_value
     st.session_state["query_widget_version"] = (
         st.session_state.get("query_widget_version", 0) + 1
     )
-    st.session_state["run_search"] = True
     st.session_state["hide_suggestions_once"] = True
-    # Yeni bir ürün/örnek seçimi her zaman sayfa 1'den başlar.
-    st.session_state["current_page"] = 1
+    _trigger_explicit_search()
 
 
 def _resolve_page_for_new_search(
@@ -1901,6 +1925,38 @@ def _make_search_input(widget_key: str, default_val: str) -> str:
     Arama kutusunu oluşturur. st_keyup varsa gerçek tuş-bazlı (config'teki
     debounce_ms kadar debounce'lı) input; yoksa düz st.text_input
     (Enter/odak ile) kullanılır.
+
+    BUG 2 KÖK NEDENİ (Enter ana aramayı çalıştırmıyordu): st_keyup (kurulu
+    sürüm 0.3.0, bkz. paketin kendi `main.js`'i) `input.onkeyup` üzerinden
+    HER tuş için (Enter dahil) BİREBİR AYNI şekilde
+    `Streamlit.setComponentValue(event.target.value)` çağırır — Enter'ı
+    normal yazmadan ayıran ayrı bir event/callback (on_enter vb.) YOKTUR ve
+    paketin PyPI'daki tek/son sürümü budur (doğrulandı). Bu yüzden Python
+    tarafında `st_keyup(...)`'a bir `on_change` bağlansa bile, o callback her
+    tuş vuruşunun debounce sonrası tetiklediği "değer değişti" olayında
+    ayrım yapmadan çalışır — "yalnızca yazarken ana aramayı otomatik
+    tetikleme" kuralını ihlal eder (her duraklamada tam ES araması atılır).
+    `st.form` da bunu çözmez: st_keyup'ın <input>'u KENDİ component
+    iframe'inin içindedir, ana sayfada Python'un çizdiği bir <form>
+    elementinin DOM ağacına hiç girmez; tarayıcının "input içinde Enter
+    formu submit eder" native davranışı bu yüzden bu input için ASLA
+    tetiklenmez (iframe izolasyonu — Streamlit'in form batching mantığından
+    bile önce, saf HTML/DOM düzeyinde bir kısıt).
+
+    Çözüm: gerçek `keydown` event'ini (Enter'ı diğer tuşlardan GERÇEKTEN
+    ayırt eden tek sinyal) doğrudan component'in kendi iframe'i içindeki
+    input'a bağlayan, ayrı bir best-effort JS köprüsü kullanılır — bkz.
+    `_render_enter_to_search_bridge` / `_build_enter_key_bridge_html`. Bu
+    köprü Enter'a basılınca Ara butonunu programatik tıklatır; böylece
+    Enter, Ara butonuyla TAMAMEN AYNI Streamlit state geçişini
+    (`_trigger_explicit_search`) tetikler. st_keyup'ın kendisi hâlâ hiçbir
+    `on_change` almaz — yalnızca yazarken canlı öneri paneli için değer
+    üretmeye devam eder, ana aramayı asla kendi başına tetiklemez.
+
+    Fallback (`st.text_input`) dalında ise native Streamlit davranışı zaten
+    yeterlidir: `on_change`, yalnızca Enter'a basıldığında veya input
+    odağını kaybettiğinde (her tuşta DEĞİL) tetiklenir — bu yüzden doğrudan
+    `_trigger_explicit_search`e bağlanabilir.
     """
     if HAS_KEYUP:
         return st_keyup(
@@ -1912,17 +1968,147 @@ def _make_search_input(widget_key: str, default_val: str) -> str:
             placeholder=CONFIG.ui.search_placeholder,
         )
 
-    def _cb():
-        st.session_state["run_search"] = True
-
     return st.text_input(
         "Ürün ara",
         value=default_val,
         key=widget_key,
         label_visibility="collapsed",
         placeholder=CONFIG.ui.search_placeholder,
-        on_change=_cb,
+        on_change=_trigger_explicit_search,
     )
+
+
+def _build_enter_key_bridge_html(button_label: str) -> str:
+    """
+    Enter tuşunu Ara butonuna tıklama olarak yönlendiren, best-effort/
+    kırılgan-toleranslı bir JS köprüsü üretir (bkz. `_make_search_input`
+    docstring'indeki kök neden analizi).
+
+    Çalışma şekli: ana sayfadaki (`window.parent.document`) TÜM iframe'ler
+    taranır, st_keyup'ın kendi (kararlı, paketin `index.html`'inde sabit)
+    `id="input_box"` elemanına sahip olanı bulunur. O input'a `keydown`
+    listener'ı eklenir; yalnızca `event.key === "Enter"` olduğunda:
+      1. component'in debounce'unu atlayıp güncel değeri hemen Streamlit'e
+         flush eder (`Streamlit.setComponentValue` — tüm
+         `components.declare_component` tabanlı component'lerin kararlı,
+         st_keyup'a özel OLMAYAN standart protokolü), böylece Enter,
+         henüz debounce süresi dolmamış son karakterleri de kaçırmaz;
+      2. ana sayfada metni `button_label`e eşit olan `<button>`ı bulup
+         tıklatır (Ara butonu).
+
+    Her adım try/catch ile korunur; bir DOM erişimi (ör. farklı
+    origin/sandbox ya da Streamlit'in gelecekteki bir sürümünde DOM yapısı
+    değişirse) başarısız olursa köprü sessizce vazgeçer — Enter o zaman
+    eskisi gibi yalnızca öneri panelini güncellemeye devam eder, ana arama
+    akışı hiçbir zaman kesilmez/bozulmaz.
+    """
+    nonce = uuid.uuid4().hex
+    button_label_json = json.dumps(button_label)
+    return f"""
+    <html>
+    <head><style>html, body {{ margin: 0; padding: 0; overflow: hidden; }}</style></head>
+    <body>
+    <!-- nonce:{nonce} — srcdoc'u her çağrıda farklılaştırıp yeniden
+         yüklemeyi zorlamak için; içerik olarak bir anlamı yok (bkz.
+         _scroll_results_to_top'taki aynı teknik). Widget key versiyonu
+         değiştiğinde (öneri/örnek seçimi) st_keyup YENİ bir iframe/input
+         oluşturur; bu köprünün her render'da yeniden çalışıp yeni input'a
+         bağlanabilmesi için reload zorunludur. -->
+    <script>
+    (function() {{
+        var MAX_ATTEMPTS = 40;
+        var attempts = 0;
+        var BUTTON_LABEL = {button_label_json};
+
+        function findKeyupInput(parentDoc) {{
+            var iframes = parentDoc.getElementsByTagName('iframe');
+            for (var i = 0; i < iframes.length; i++) {{
+                try {{
+                    var doc = iframes[i].contentDocument;
+                    if (!doc) continue;
+                    var input = doc.getElementById('input_box');
+                    if (input) {{
+                        return {{ input: input, win: iframes[i].contentWindow }};
+                    }}
+                }} catch (err) {{
+                    continue;
+                }}
+            }}
+            return null;
+        }}
+
+        function findSearchButton(parentDoc) {{
+            var buttons = parentDoc.getElementsByTagName('button');
+            for (var i = 0; i < buttons.length; i++) {{
+                if ((buttons[i].textContent || '').trim() === BUTTON_LABEL) {{
+                    return buttons[i];
+                }}
+            }}
+            return null;
+        }}
+
+        function attach() {{
+            attempts += 1;
+            var parentDoc;
+            try {{
+                parentDoc = window.parent && window.parent.document;
+            }} catch (err) {{
+                return;
+            }}
+            if (!parentDoc) return;
+
+            var found = findKeyupInput(parentDoc);
+            if (found && !found.input.dataset.enterBridgeAttached) {{
+                found.input.dataset.enterBridgeAttached = "1";
+                found.input.addEventListener('keydown', function(event) {{
+                    if (event.key !== 'Enter') return;
+                    try {{
+                        event.preventDefault();
+                        if (found.win && found.win.Streamlit) {{
+                            found.win.Streamlit.setComponentValue(found.input.value);
+                        }}
+                        var button = findSearchButton(parentDoc);
+                        if (button) {{
+                            button.click();
+                        }}
+                    }} catch (err) {{
+                        // best-effort — sessizce vazgeç, ana arama akışını etkileme.
+                    }}
+                }});
+            }}
+            if (!(found && found.input.dataset.enterBridgeAttached) && attempts < MAX_ATTEMPTS) {{
+                window.requestAnimationFrame(attach);
+            }}
+        }}
+
+        try {{
+            window.requestAnimationFrame(attach);
+        }} catch (err) {{}}
+    }})();
+    </script>
+    </body>
+    </html>
+    """
+
+
+def _render_enter_to_search_bridge(button_label: str):
+    """
+    `_build_enter_key_bridge_html` çıktısını görünmez bir iframe olarak
+    çizer. Yalnızca HAS_KEYUP true iken anlamlıdır — düz `st.text_input`
+    fallback'i zaten native olarak Enter'da `on_change` tetikler (bkz.
+    `_make_search_input`), ayrı bir köprüye ihtiyaç duymaz.
+
+    Component render'ı sırasında oluşabilecek HERHANGİ bir hata (bkz.
+    `_scroll_results_to_top` ile aynı gerekçe) burada yutulur: bu köprü
+    saf bir UX iyileştirmesidir, başarısız olması ana arama akışını
+    kesmemelidir.
+    """
+    if not HAS_KEYUP:
+        return
+    try:
+        st.iframe(_build_enter_key_bridge_html(button_label), height="content", width="stretch")
+    except Exception:
+        return
 
 
 # ---------------------------------------------------------------------------
@@ -1952,12 +2138,17 @@ def main():
     widget_key = f"search_box_v{version}"
     default_val = st.session_state.get("pending_value", "")
 
+    search_button_label = ui.label("search_button", "Ara")
     col_input, col_button = st.columns([5, 1])
     with col_input:
         typed = _make_search_input(widget_key, default_val)
     with col_button:
-        if st.button(ui.label("search_button", "Ara"), type="primary", use_container_width=True):
-            st.session_state["run_search"] = True
+        if st.button(search_button_label, type="primary", use_container_width=True):
+            _trigger_explicit_search()
+    # Enter -> Ara butonu köprüsü (yalnızca st_keyup kuruluyken anlamlı; bkz.
+    # _make_search_input docstring'i). Input + buton DOM'a çizildikten SONRA
+    # çağrılmalı ki köprü ikisini de bulabilsin.
+    _render_enter_to_search_bridge(search_button_label)
     # pending_value yalnızca yeni widget'ın default'u olarak bir kez kullanılır.
     st.session_state.pop("pending_value", None)
 
