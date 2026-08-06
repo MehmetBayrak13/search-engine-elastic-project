@@ -230,6 +230,49 @@ class QualityRankingConfig:
 
 
 @dataclass(frozen=True)
+class TitleRankingConfig:
+    """Title alanı için katmanlı skor ayarları. Yalnızca burada tanımlı iki
+    YENİ katmanı (exact, prefix) kontrol eder — phrase/normal/fuzzy
+    katmanları hâlâ `search_methods`'tan (değişmeden) beslenir; bkz. spec
+    §5. `enabled=false` iken bu iki katman hiç eklenmez, mevcut davranış
+    aynen sürer."""
+
+    enabled: bool
+    exact_field: str
+    exact_boost: float
+    prefix_boost: float
+    prefix_max_expansions: int
+
+
+@dataclass(frozen=True)
+class IntentRankingConfig:
+    """Kategori boost/penalty'nin toplam etkisini sınırlayan tavan/taban
+    değerleri (bkz. spec §6-7). `manual_category_boost_cap` ve
+    `dynamic_category_boost_cap` her kaynağın (manuel/dinamik) topladığı
+    boost'ları, tavanı aşarsa oransal olarak küçültür.
+    `negative_penalty_floor`, soft negatif kategori penalty'sinin
+    (0-1 çarpan) hiçbir zaman bu değerin altına inemeyeceği bir taban
+    koyar — sonuç asla tamamen silinmez."""
+
+    enabled: bool
+    manual_category_boost_cap: float
+    dynamic_category_boost_cap: float
+    negative_penalty_floor: float
+
+
+@dataclass(frozen=True)
+class CategoryBoostEntry:
+    value: str
+    boost: float
+
+
+@dataclass(frozen=True)
+class CategoryPenaltyEntry:
+    value: str
+    penalty: float
+
+
+@dataclass(frozen=True)
 class PaginationConfig:
     """Basit `from + size` tabanlı sayfalama ayarları.
 
@@ -310,6 +353,8 @@ class AppConfig:
     translation: TranslationConfig
     dynamic_intent: DynamicIntentConfig
     quality_ranking: QualityRankingConfig
+    title_ranking: TitleRankingConfig
+    intent_ranking: IntentRankingConfig
     pagination: PaginationConfig
     source_fields: SourceFieldsConfig
     ui: UIConfig
@@ -324,16 +369,21 @@ class IntentRule:
     display-label/icon/priority/enabled)."""
 
     name: str
-    query_terms: tuple[str, ...]  # aliases / tetikleyici terimler
+    query_terms: tuple[str, ...]  # legacy aliases / tetikleyici terimler (any-match)
     excluded_when_query_contains: tuple[str, ...]
-    category_boost_terms: tuple[str, ...]  # force_boost terimleri
-    negative_categories: tuple[str, ...]  # exclusions
+    category_boost_terms: tuple[str, ...]  # force_boost terimleri (legacy)
+    negative_categories: tuple[str, ...]  # legacy hard exclusion değerleri
     category_boost: float
     category_boost_tr: float
     label: str  # display_label
     icon: str
     priority: float = 0
     enabled: bool = True
+    all_terms: tuple[str, ...] = ()  # hepsi eşleşmeli (AND)
+    any_terms: tuple[str, ...] = ()  # `query_terms`in yeni adı; boşsa query_terms kullanılır (OR)
+    excluded_terms: tuple[str, ...] = ()  # `excluded_when_query_contains`in yeni adı
+    positive_categories: tuple[CategoryBoostEntry, ...] = ()  # yeni: obje-biçimli boost
+    soft_negative_categories: tuple[CategoryPenaltyEntry, ...] = ()  # yeni: obje-biçimli penalty
 
 
 @dataclass(frozen=True)
@@ -470,6 +520,38 @@ def _build_autocomplete_ui(raw: Any, context: str) -> AutocompleteUIConfig:
     )
 
 
+def _build_title_ranking(raw: Any, context: str) -> TitleRankingConfig:
+    raw = _require_dict(raw, context)
+    return TitleRankingConfig(
+        enabled=_require_bool(raw.get("enabled"), f"{context}.enabled"),
+        exact_field=_require_str(raw.get("exact_field"), f"{context}.exact_field"),
+        exact_boost=_require_positive_number(raw.get("exact_boost"), f"{context}.exact_boost"),
+        prefix_boost=_require_positive_number(raw.get("prefix_boost"), f"{context}.prefix_boost"),
+        prefix_max_expansions=_require_positive_int(
+            raw.get("prefix_max_expansions"), f"{context}.prefix_max_expansions"
+        ),
+    )
+
+
+def _build_intent_ranking(raw: Any, context: str) -> IntentRankingConfig:
+    raw = _require_dict(raw, context)
+    negative_penalty_floor = _require_positive_number(
+        raw.get("negative_penalty_floor"), f"{context}.negative_penalty_floor"
+    )
+    if negative_penalty_floor > 1:
+        raise ConfigError(f"{context}.negative_penalty_floor 0-1 aralığında olmalı.")
+    return IntentRankingConfig(
+        enabled=_require_bool(raw.get("enabled"), f"{context}.enabled"),
+        manual_category_boost_cap=_require_positive_number(
+            raw.get("manual_category_boost_cap"), f"{context}.manual_category_boost_cap"
+        ),
+        dynamic_category_boost_cap=_require_positive_number(
+            raw.get("dynamic_category_boost_cap"), f"{context}.dynamic_category_boost_cap"
+        ),
+        negative_penalty_floor=negative_penalty_floor,
+    )
+
+
 def _build_fuzzy(raw: Any, context: str) -> MultiFieldQueryConfig:
     raw = _require_dict(raw, context)
     return MultiFieldQueryConfig(
@@ -580,6 +662,8 @@ def load_search_config(path: Path = SEARCH_CONFIG_PATH) -> AppConfig:
 
     dynamic_intent = _build_dynamic_intent(raw.get("dynamic_intent"), "dynamic_intent")
     quality_ranking = _build_quality_ranking(raw.get("quality_ranking"), "quality_ranking")
+    title_ranking = _build_title_ranking(raw.get("title_ranking"), "title_ranking")
+    intent_ranking = _build_intent_ranking(raw.get("intent_ranking"), "intent_ranking")
     pagination = _build_pagination(raw.get("pagination"), "pagination")
 
     source_fields_raw = _require_dict(raw.get("source_fields"), "source_fields")
@@ -616,12 +700,68 @@ def load_search_config(path: Path = SEARCH_CONFIG_PATH) -> AppConfig:
         translation=translation,
         dynamic_intent=dynamic_intent,
         quality_ranking=quality_ranking,
+        title_ranking=title_ranking,
+        intent_ranking=intent_ranking,
         pagination=pagination,
         source_fields=source_fields,
         ui=ui,
         autocomplete_ui=autocomplete_ui,
         product_url_template=product_url_template,
     )
+
+
+def _build_category_boost_entries(raw: Any, context: str) -> tuple["CategoryBoostEntry", ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ConfigError(f"{context} bir liste olmalı, alınan: {raw!r}")
+    entries = []
+    for index, item in enumerate(raw):
+        item_context = f"{context}[{index}]"
+        item = _require_dict(item, item_context)
+        entries.append(CategoryBoostEntry(
+            value=_require_str(item.get("value"), f"{item_context}.value"),
+            boost=_require_positive_number(item.get("boost"), f"{item_context}.boost"),
+        ))
+    return tuple(entries)
+
+
+def _build_negative_categories(
+    raw: Any, context: str
+) -> tuple[tuple[str, ...], tuple["CategoryPenaltyEntry", ...]]:
+    """Şekle göre ayrıştırır: tümü string ise legacy hard-exclusion listesi,
+    tümü {'value','penalty'} nesnesi ise yeni soft-penalty listesi döner.
+    Karışık şekil (bir kuralın aynı listesinde hem string hem nesne)
+    reddedilir — hard/soft ayrımı asla belirsiz olamaz."""
+    if raw is None:
+        return (), ()
+    if not isinstance(raw, list):
+        raise ConfigError(f"{context} bir liste olmalı, alınan: {raw!r}")
+    if not raw:
+        return (), ()
+
+    is_string_shape = all(isinstance(item, str) for item in raw)
+    is_object_shape = all(isinstance(item, dict) for item in raw)
+    if not is_string_shape and not is_object_shape:
+        raise ConfigError(
+            f"{context} ya tümü metin (legacy hard exclusion) ya da tümü "
+            f"{{'value','penalty'}} nesnesi (yeni soft penalty) olmalı; karışık olamaz."
+        )
+
+    if is_string_shape:
+        return tuple(raw), ()
+
+    entries = []
+    for index, item in enumerate(raw):
+        item_context = f"{context}[{index}]"
+        penalty = _require_positive_number(item.get("penalty"), f"{item_context}.penalty")
+        if penalty > 1:
+            raise ConfigError(f"{item_context}.penalty 0-1 aralığında olmalı.")
+        entries.append(CategoryPenaltyEntry(
+            value=_require_str(item.get("value"), f"{item_context}.value"),
+            penalty=penalty,
+        ))
+    return (), tuple(entries)
 
 
 @lru_cache(maxsize=None)
@@ -638,9 +778,28 @@ def load_intent_rules(path: Path = INTENT_RULES_PATH) -> dict[str, IntentRule]:
         enabled = rule_raw.get("enabled", True)
         enabled = _require_bool(enabled, f"{context}.enabled")
 
+        query_terms = _require_str_list(
+            rule_raw.get("query_terms", []), f"{context}.query_terms", allow_empty=True
+        )
+        all_terms = _require_str_list(
+            rule_raw.get("all_terms", []), f"{context}.all_terms", allow_empty=True
+        )
+        any_terms = _require_str_list(
+            rule_raw.get("any_terms", []), f"{context}.any_terms", allow_empty=True
+        )
+        if not (query_terms or all_terms or any_terms):
+            raise ConfigError(
+                f"{context} en az bir tetikleyici terim listesi içermeli "
+                f"(query_terms, any_terms veya all_terms)."
+            )
+
+        negative_categories, soft_negative_categories = _build_negative_categories(
+            rule_raw.get("negative_categories"), f"{context}.negative_categories"
+        )
+
         rules[name] = IntentRule(
             name=name,
-            query_terms=_require_str_list(rule_raw.get("query_terms"), f"{context}.query_terms"),
+            query_terms=query_terms,
             excluded_when_query_contains=_require_str_list(
                 rule_raw.get("excluded_when_query_contains", []),
                 f"{context}.excluded_when_query_contains",
@@ -651,11 +810,7 @@ def load_intent_rules(path: Path = INTENT_RULES_PATH) -> dict[str, IntentRule]:
                 f"{context}.category_boost_terms",
                 allow_empty=True,
             ),
-            negative_categories=_require_str_list(
-                rule_raw.get("negative_categories", []),
-                f"{context}.negative_categories",
-                allow_empty=True,
-            ),
+            negative_categories=negative_categories,
             category_boost=_require_positive_number(
                 rule_raw.get("category_boost", 1), f"{context}.category_boost"
             ),
@@ -668,6 +823,15 @@ def load_intent_rules(path: Path = INTENT_RULES_PATH) -> dict[str, IntentRule]:
             if "priority" in rule_raw
             else 0,
             enabled=enabled,
+            all_terms=all_terms,
+            any_terms=any_terms,
+            excluded_terms=_require_str_list(
+                rule_raw.get("excluded_terms", []), f"{context}.excluded_terms", allow_empty=True
+            ),
+            positive_categories=_build_category_boost_entries(
+                rule_raw.get("positive_categories"), f"{context}.positive_categories"
+            ),
+            soft_negative_categories=soft_negative_categories,
         )
 
     return rules

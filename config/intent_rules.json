@@ -18,5 +18,18 @@
     "icon": "🕒",
     "priority": 10,
     "enabled": true
+  },
+  "iphone_case": {
+    "all_terms": ["iphone", "case"],
+    "positive_categories": [
+      {"value": "Cases", "boost": 3.0},
+      {"value": "Cell Phones & Accessories", "boost": 1.8}
+    ],
+    "negative_categories": [
+      {"value": "Cell Phones", "penalty": 0.5}
+    ],
+    "label": "iPhone kılıfı niyeti algılandı",
+    "icon": "📱",
+    "enabled": true
   }
 }

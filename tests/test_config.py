@@ -114,6 +114,19 @@ def _minimal_search_config(**overrides):
             "debounce_ms": 350,
             "intent_fallback_icon": "🏷️",
         },
+        "title_ranking": {
+            "enabled": True,
+            "exact_field": "title.keyword",
+            "exact_boost": 8.0,
+            "prefix_boost": 3.5,
+            "prefix_max_expansions": 20,
+        },
+        "intent_ranking": {
+            "enabled": True,
+            "manual_category_boost_cap": 5.0,
+            "dynamic_category_boost_cap": 2.0,
+            "negative_penalty_floor": 0.3,
+        },
     }
     for dotted_key, value in overrides.items():
         section, _, field_name = dotted_key.partition(".")
@@ -396,3 +409,164 @@ def test_malformed_translation_rule_is_rejected(tmp_path):
     )
     with pytest.raises(ConfigError):
         load_translations(path)
+
+
+def test_title_ranking_loads_from_default_repo_config():
+    app_config = load_search_config()
+    assert app_config.title_ranking.enabled is True
+    assert app_config.title_ranking.exact_field == "title.keyword"
+    assert app_config.title_ranking.exact_boost > 0
+    assert app_config.title_ranking.prefix_max_expansions > 0
+
+
+def test_title_ranking_missing_section_is_rejected(tmp_path):
+    data = _minimal_search_config()
+    del data["title_ranking"]
+    path = _write_json(tmp_path / "search_config.json", data)
+    with pytest.raises(ConfigError):
+        load_search_config(path)
+
+
+def test_title_ranking_negative_boost_is_rejected(tmp_path):
+    data = _minimal_search_config()
+    data["title_ranking"]["exact_boost"] = -1
+    path = _write_json(tmp_path / "search_config.json", data)
+    with pytest.raises(ConfigError):
+        load_search_config(path)
+
+
+def test_title_ranking_non_positive_prefix_max_expansions_is_rejected(tmp_path):
+    data = _minimal_search_config()
+    data["title_ranking"]["prefix_max_expansions"] = 0
+    path = _write_json(tmp_path / "search_config.json", data)
+    with pytest.raises(ConfigError):
+        load_search_config(path)
+
+
+def test_intent_ranking_loads_from_default_repo_config():
+    app_config = load_search_config()
+    assert app_config.intent_ranking.enabled is True
+    assert app_config.intent_ranking.manual_category_boost_cap > 0
+    assert app_config.intent_ranking.dynamic_category_boost_cap > 0
+    assert 0 < app_config.intent_ranking.negative_penalty_floor <= 1
+
+
+def test_intent_ranking_missing_section_is_rejected(tmp_path):
+    data = _minimal_search_config()
+    del data["intent_ranking"]
+    path = _write_json(tmp_path / "search_config.json", data)
+    with pytest.raises(ConfigError):
+        load_search_config(path)
+
+
+def test_intent_ranking_negative_penalty_floor_out_of_range_is_rejected(tmp_path):
+    data = _minimal_search_config()
+    data["intent_ranking"]["negative_penalty_floor"] = 1.5
+    path = _write_json(tmp_path / "search_config.json", data)
+    with pytest.raises(ConfigError):
+        load_search_config(path)
+
+
+def test_intent_rule_query_terms_optional_when_all_terms_present(tmp_path):
+    path = _write_json(
+        tmp_path / "intent_rules.json",
+        {"iphone_case": {"all_terms": ["iphone", "case"], "label": "x", "icon": ""}},
+    )
+    rules = load_intent_rules(path)
+    assert rules["iphone_case"].query_terms == ()
+    assert rules["iphone_case"].all_terms == ("iphone", "case")
+
+
+def test_intent_rule_without_any_trigger_terms_is_rejected(tmp_path):
+    path = _write_json(
+        tmp_path / "intent_rules.json",
+        {"broken": {"label": "x", "icon": ""}},
+    )
+    with pytest.raises(ConfigError):
+        load_intent_rules(path)
+
+
+def test_intent_rule_positive_categories_parsed(tmp_path):
+    path = _write_json(
+        tmp_path / "intent_rules.json",
+        {
+            "iphone_case": {
+                "all_terms": ["iphone", "case"],
+                "positive_categories": [{"value": "Cases", "boost": 3.0}],
+                "label": "x",
+                "icon": "",
+            }
+        },
+    )
+    rules = load_intent_rules(path)
+    assert rules["iphone_case"].positive_categories[0].value == "Cases"
+    assert rules["iphone_case"].positive_categories[0].boost == 3.0
+
+
+def test_intent_rule_negative_categories_legacy_string_shape_unchanged(tmp_path):
+    path = _write_json(
+        tmp_path / "intent_rules.json",
+        {"watch": {"query_terms": ["watch"], "negative_categories": ["books"], "label": "x", "icon": ""}},
+    )
+    rules = load_intent_rules(path)
+    assert rules["watch"].negative_categories == ("books",)
+    assert rules["watch"].soft_negative_categories == ()
+
+
+def test_intent_rule_negative_categories_new_object_shape(tmp_path):
+    path = _write_json(
+        tmp_path / "intent_rules.json",
+        {
+            "iphone_case": {
+                "all_terms": ["iphone", "case"],
+                "negative_categories": [{"value": "Cell Phones", "penalty": 0.5}],
+                "label": "x",
+                "icon": "",
+            }
+        },
+    )
+    rules = load_intent_rules(path)
+    assert rules["iphone_case"].negative_categories == ()
+    assert rules["iphone_case"].soft_negative_categories[0].value == "Cell Phones"
+    assert rules["iphone_case"].soft_negative_categories[0].penalty == 0.5
+
+
+def test_intent_rule_negative_categories_mixed_shape_is_rejected(tmp_path):
+    path = _write_json(
+        tmp_path / "intent_rules.json",
+        {
+            "broken": {
+                "query_terms": ["x"],
+                "negative_categories": ["books", {"value": "Cell Phones", "penalty": 0.5}],
+                "label": "x",
+                "icon": "",
+            }
+        },
+    )
+    with pytest.raises(ConfigError):
+        load_intent_rules(path)
+
+
+def test_intent_rule_negative_category_penalty_out_of_range_is_rejected(tmp_path):
+    path = _write_json(
+        tmp_path / "intent_rules.json",
+        {
+            "broken": {
+                "query_terms": ["x"],
+                "negative_categories": [{"value": "Cell Phones", "penalty": 1.5}],
+                "label": "x",
+                "icon": "",
+            }
+        },
+    )
+    with pytest.raises(ConfigError):
+        load_intent_rules(path)
+
+
+def test_iphone_case_rule_loads_from_default_repo_config():
+    rules = load_intent_rules()
+    assert "iphone_case" in rules
+    rule = rules["iphone_case"]
+    assert set(rule.all_terms) == {"iphone", "case"}
+    assert rule.positive_categories
+    assert rule.soft_negative_categories

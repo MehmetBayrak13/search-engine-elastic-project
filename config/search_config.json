@@ -99,6 +99,19 @@
     "discovery_filter_enabled": false,
     "discovery_min_data_quality_score": 0.3
   },
+  "title_ranking": {
+    "enabled": true,
+    "exact_field": "title.keyword",
+    "exact_boost": 8.0,
+    "prefix_boost": 3.5,
+    "prefix_max_expansions": 20
+  },
+  "intent_ranking": {
+    "enabled": true,
+    "manual_category_boost_cap": 5.0,
+    "dynamic_category_boost_cap": 2.0,
+    "negative_penalty_floor": 0.3
+  },
   "source_fields": {
     "search": [
       "parent_asin", "title", "main_category", "categories", "source_category",
