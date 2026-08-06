@@ -1,4 +1,33 @@
+import json
+from pathlib import Path
+
 import app
+from config import clear_config_cache, load_search_config
+
+
+def _repo_search_config_dict():
+    return json.loads(Path("config/search_config.json").read_text(encoding="utf-8"))
+
+
+def _tmp_path_config(tmp_path_factory, data):
+    path = tmp_path_factory.mktemp("cfg") / "search_config.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return path
+
+
+def test_build_search_query_config_override_changes_size_without_touching_global(tmp_path_factory):
+    import services.search_service as search_service
+
+    data = _repo_search_config_dict()
+    data["limits"]["result_size"] = 3
+    data["pagination"]["enabled"] = False
+    override_path = _tmp_path_config(tmp_path_factory, data)
+    override_config = load_search_config(override_path)
+
+    payload = search_service.build_search_query("wireless mouse", config=override_config)
+    assert payload["size"] == 3
+    assert search_service.CONFIG.limits.result_size != 3
+    clear_config_cache()
 
 
 def test_no_lexical_methods_returns_match_none():

@@ -25,11 +25,15 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import requests
 
 from config import ConfigError, load_intent_rules, load_search_config, load_translations
 from services.search_models import PaginationLimitError, SearchResult
+
+if TYPE_CHECKING:
+    from config import AppConfig
 
 __all__ = [
     "CONFIG",
@@ -293,6 +297,8 @@ def _build_translation_lexical_queries(query_text: str) -> list[dict]:
 def build_category_discovery_query(
     query_text: str,
     extra_query_texts: list[str] | None = None,
+    *,
+    config: "AppConfig | None" = None,
 ) -> dict:
     """
     Yalnızca kategori adaylarını keşfetmek için size=0 bir aggregation
@@ -302,8 +308,15 @@ def build_category_discovery_query(
 
     Kullanıcıdan ham alan adı veya ham Query DSL alınmaz; tüm alanlar ve
     limitler config/search_config.json'daki `dynamic_intent` bölümünden gelir.
+
+    `config`: opsiyonel `AppConfig` override'ı (varsayılan: modül seviyesi
+    `CONFIG`). Yalnızca `tools/evaluate_intent_ranking.py` gibi offline
+    değerlendirme araçlarının, global state'i değiştirmeden aynı süreçte
+    birden fazla config varyantını karşılaştırabilmesi için vardır; normal
+    çağrı yollarında (app.py, api) her zaman atlanır.
     """
-    dyn = CONFIG.dynamic_intent
+    cfg = config or CONFIG
+    dyn = cfg.dynamic_intent
 
     candidate_texts = [text for text in [query_text, *(extra_query_texts or [])] if text]
     should = [
@@ -332,7 +345,7 @@ def build_category_discovery_query(
     # belgeyle eşleşmez → must_not altında hiçbir şeyi dışlamaz (no-op);
     # bu yüzden reindex tamamlanana kadar flag açık bırakılsa bile davranış
     # bozulmaz. Yine de ilk migration öncesinde flag KAPALI tutulur (varsayılan).
-    qr = CONFIG.quality_ranking
+    qr = cfg.quality_ranking
     if qr.discovery_filter_enabled:
         query = {
             "bool": {
@@ -350,7 +363,9 @@ def build_category_discovery_query(
     }
 
 
-def fetch_category_aggregations(query_text: str, extra_query_texts: tuple[str, ...] = ()):
+def fetch_category_aggregations(
+    query_text: str, extra_query_texts: tuple[str, ...] = (), *, config: "AppConfig | None" = None
+):
     """
     Kategori keşif aggregation'ını Elasticsearch'ten getirir (ÖNBELLEKSİZ —
     Streamlit önbelleklemesi burada değil `app.py`'de yapılır, bkz. modül
@@ -358,18 +373,25 @@ def fetch_category_aggregations(query_text: str, extra_query_texts: tuple[str, .
     çağıran taraf (app.py) kendi `st.cache_data` sarmalayıcısını enjekte
     edebilir.
 
+    `config`: opsiyonel `AppConfig` override'ı (bkz. `build_category_discovery_query`).
+
     Dönüş: (aggregations_dict, hata_mesajı). Hata varsa aggregations_dict {}
     döner — bu, çağıran tarafın hatayı yutup normal aramayı engellememesini
     sağlar; kategori keşfi tek hata noktası olamaz.
     """
-    payload = build_category_discovery_query(query_text, list(extra_query_texts))
-    data, error = _post_search(payload, timeout=CONFIG.dynamic_intent.timeout_seconds, index=INDEX_NAME)
+    cfg = config or CONFIG
+    payload = build_category_discovery_query(query_text, list(extra_query_texts), config=cfg)
+    data, error = _post_search(
+        payload, timeout=cfg.dynamic_intent.timeout_seconds, index=cfg.elasticsearch.search_index_expr
+    )
     if error:
         return {}, error
     return data.get("aggregations", {}), None
 
 
-def discover_category_intent(query_text: str, *, fetch_aggregations=None) -> list[dict]:
+def discover_category_intent(
+    query_text: str, *, fetch_aggregations=None, config: "AppConfig | None" = None
+) -> list[dict]:
     """
     Sorgudan (orijinal + normalize edilmiş + en yüksek öncelikli İngilizce
     çeviri kullanılarak) Elasticsearch aggregation'ları ile kategori adayları
@@ -381,13 +403,17 @@ def discover_category_intent(query_text: str, *, fetch_aggregations=None) -> lis
 
     `fetch_aggregations`: varsayılan `fetch_category_aggregations` (önbelleksiz);
     `app.py` burada kendi `st.cache_data` sarmalayıcısını geçirir.
+    `config`: opsiyonel `AppConfig` override'ı (bkz. `build_category_discovery_query`);
+    varsayılan fetcher'a da aktarılır.
 
     Dönüş: [{"value": str, "field": str, "doc_count": int, "rank": int,
              "source": "dynamic_category_discovery"}, ...]
     """
-    fetch_aggregations = fetch_aggregations or fetch_category_aggregations
+    cfg = config or CONFIG
+    if fetch_aggregations is None:
+        fetch_aggregations = lambda q, extra: fetch_category_aggregations(q, extra, config=cfg)
 
-    dyn = CONFIG.dynamic_intent
+    dyn = cfg.dynamic_intent
     if not dyn.enabled:
         return []
 
@@ -445,7 +471,13 @@ def build_dynamic_category_boosts(candidates: list[dict]) -> list[dict]:
     ]
 
 
-def resolve_intent_signals(query_text: str, include_dynamic: bool = True, *, fetch_aggregations=None):
+def resolve_intent_signals(
+    query_text: str,
+    include_dynamic: bool = True,
+    *,
+    fetch_aggregations=None,
+    config: "AppConfig | None" = None,
+):
     """
     Manuel intent kuralları (`intent_rules.json`) ile dinamik kategori
     keşfini birleştiren ana giriş noktası. `intent_rules.json` artık ana
@@ -456,6 +488,12 @@ def resolve_intent_signals(query_text: str, include_dynamic: bool = True, *, fet
         (override, keşfi çelmeyecek şekilde bastırır).
       - `include_dynamic=False` yalnızca autocomplete tarafından kullanılır
         (dinamik keşif autocomplete'te ÇALIŞMAZ).
+
+    `config`: kabul edilir ama (Task 3 itibarıyla) henüz KULLANILMAZ — bu
+    fonksiyonun içi hâlâ modül seviyesi `CONFIG`'i okur. Parametre yalnızca
+    `search_products`'ın `config=cfg` aktarabilmesi için burada durur;
+    gerçek kablolama (dinamik keşfe `config` aktarımı, `CONFIG.dynamic_intent`
+    yerine `cfg.dynamic_intent` kullanımı) Task 4'te yapılır.
 
     Dönüş: (boost_queries, exclusions) — build_search_query'nin bool.should
     ve bool.must_not'una doğrudan eklenir.
@@ -594,6 +632,8 @@ def build_search_query(
     apply_intent_reranking: bool = True,
     intent_boost_queries: list[dict] | None = None,
     intent_exclusions: list[dict] | None = None,
+    *,
+    config: "AppConfig | None" = None,
 ) -> dict:
     """
     Seçili yöntemlere göre intent-farkındalıklı bir Elasticsearch sorgusu üretir.
@@ -634,10 +674,11 @@ def build_search_query(
       `from + size`, `pagination.max_result_window`'ı aşarsa
       `PaginationLimitError` fırlatılır — sorgu hiç oluşturulmaz.
     """
-    methods = CONFIG.search_methods
-    pagination = CONFIG.pagination
+    cfg = config or CONFIG
+    methods = cfg.search_methods
+    pagination = cfg.pagination
     track_total_hits = (
-        track_total_hits if track_total_hits is not None else CONFIG.elasticsearch.track_total_hits
+        track_total_hits if track_total_hits is not None else cfg.elasticsearch.track_total_hits
     )
 
     normalized_page = _normalize_page(page)
@@ -647,7 +688,7 @@ def build_search_query(
         if from_ + size > pagination.max_result_window:
             raise PaginationLimitError(normalized_page, pagination.max_allowed_page)
     else:
-        size = result_size if result_size is not None else CONFIG.limits.result_size
+        size = result_size if result_size is not None else cfg.limits.result_size
         from_ = None
 
     lexical_queries = []
@@ -706,7 +747,7 @@ def build_search_query(
         payload = {
             "size": size,
             "track_total_hits": track_total_hits,
-            "_source": SOURCE_FIELDS,
+            "_source": list(cfg.source_fields.search),
             "query": {"match_none": {}},
         }
         if from_ is not None:
@@ -752,7 +793,7 @@ def build_search_query(
     payload = {
         "size": size,
         "track_total_hits": track_total_hits,
-        "_source": SOURCE_FIELDS,
+        "_source": list(cfg.source_fields.search),
         "query": final_query,
     }
     if from_ is not None:
@@ -832,6 +873,7 @@ def search_products(
     page: int = 1,
     *,
     fetch_aggregations=None,
+    config: "AppConfig | None" = None,
 ) -> SearchResult:
     """
     Seçili yöntemlerle üretilen gelişmiş sorguyu Elastic Cloud'a gönderir.
@@ -846,6 +888,8 @@ def search_products(
     `fetch_aggregations`: kategori keşfi için kullanılacak fetcher (bkz.
     `discover_category_intent`); `app.py` burada kendi `st.cache_data`
     sarmalayıcısını enjekte eder.
+    `config`: opsiyonel `AppConfig` override'ı (bkz. `build_search_query`);
+    `resolve_intent_signals` ve `build_search_query` çağrılarına aktarılır.
 
     Sayfalama: `page` (1-tabanlı), `pagination.enabled` iken
     `build_search_query`'ye aktarılır. `from + size`,
@@ -856,12 +900,13 @@ def search_products(
 
     Dönüş: `SearchResult`. Hata varsa `hits` None döner.
     """
-    pagination = CONFIG.pagination
+    cfg = config or CONFIG
+    pagination = cfg.pagination
     normalized_page = _normalize_page(page)
-    page_size = pagination.page_size if pagination.enabled else CONFIG.limits.result_size
+    page_size = pagination.page_size if pagination.enabled else cfg.limits.result_size
 
     intent_boost_queries, intent_exclusions = resolve_intent_signals(
-        query_text, include_dynamic=True, fetch_aggregations=fetch_aggregations
+        query_text, include_dynamic=True, fetch_aggregations=fetch_aggregations, config=cfg
     )
     try:
         payload = build_search_query(
@@ -870,11 +915,12 @@ def search_products(
             enable_multi_match=enable_multi_match,
             enable_fuzzy=enable_fuzzy,
             enable_exact_asin=enable_exact_asin,
-            result_size=CONFIG.limits.result_size,
+            result_size=cfg.limits.result_size,
             page=normalized_page,
             track_total_hits=True,
             intent_boost_queries=intent_boost_queries,
             intent_exclusions=intent_exclusions,
+            config=cfg,
         )
     except PaginationLimitError as limit_error:
         message = CONFIG.ui.message(
@@ -895,7 +941,7 @@ def search_products(
             has_next=False,
         )
 
-    data, error = _post_search(payload, timeout=CONFIG.elasticsearch.search_timeout_seconds)
+    data, error = _post_search(payload, timeout=cfg.elasticsearch.search_timeout_seconds)
     if error:
         return SearchResult(
             hits=None,
