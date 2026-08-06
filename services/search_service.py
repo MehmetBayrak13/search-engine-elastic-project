@@ -674,6 +674,30 @@ def build_search_query(
             }
         })
 
+    # E/F. Title katmanlı skorlama — yalnızca title_ranking.enabled ile
+    # kontrol edilir (enable_phrase'e BAĞLI DEĞİLDİR; phrase search kapalı
+    # olsa bile bu iki katman çalışabilir — bkz. spec §5 düzeltmesi).
+    title_ranking = cfg.title_ranking
+    if title_ranking.enabled:
+        lexical_queries.append({
+            "term": {
+                title_ranking.exact_field: {
+                    "value": query_text,
+                    "boost": title_ranking.exact_boost,
+                    "case_insensitive": True,
+                }
+            }
+        })
+        lexical_queries.append({
+            "match_phrase_prefix": {
+                "title": {
+                    "query": query_text,
+                    "boost": title_ranking.prefix_boost,
+                    "max_expansions": title_ranking.prefix_max_expansions,
+                }
+            }
+        })
+
     # Hiç lexical yöntem yoksa güvenlik ağı.
     if not lexical_queries:
         payload = {

@@ -31,12 +31,22 @@ def test_build_search_query_config_override_changes_size_without_touching_global
 
 
 def test_no_lexical_methods_returns_match_none():
+    from dataclasses import replace
+
+    # title_ranking's exact/prefix tiers are a lexical method in their own
+    # right (gated only by config, not by these enable_* switches), so they
+    # must also be turned off to exercise the true "no lexical method"
+    # safety net.
+    no_title_ranking_cfg = replace(
+        app.CONFIG, title_ranking=replace(app.CONFIG.title_ranking, enabled=False)
+    )
     payload = app.build_search_query(
         "kamera",
         enable_phrase=False,
         enable_multi_match=False,
         enable_fuzzy=False,
         enable_exact_asin=False,
+        config=no_title_ranking_cfg,
     )
     assert payload["query"] == {"match_none": {}}
 
@@ -71,10 +81,13 @@ def test_watch_book_query_does_not_exclude_books():
 def test_exact_asin_field_and_boost_come_from_config():
     payload = app.build_search_query("B000123456", apply_intent_reranking=False)
     lexical = payload["query"]["bool"]["must"][0]["bool"]["should"]
-    asin_clauses = [c for c in lexical if "term" in c]
-    assert len(asin_clauses) == 1
     field = app.CONFIG.search_methods.exact_asin.field
     boost = app.CONFIG.search_methods.exact_asin.boost
+    # `term` clauses also come from the independent title_ranking exact tier
+    # (title.keyword), so filter for the exact-ASIN field specifically
+    # rather than assuming it's the only `term` clause present.
+    asin_clauses = [c for c in lexical if "term" in c and field in c["term"]]
+    assert len(asin_clauses) == 1
     assert asin_clauses[0]["term"][field]["boost"] == boost
 
 
@@ -164,9 +177,18 @@ def test_search_service_resolve_intent_signals_returns_intent_signals_object():
 
 
 def test_category_signal_alone_cannot_produce_a_hit():
+    from dataclasses import replace
+
+    # As above: title_ranking's tiers are an independent lexical method, so
+    # they must be disabled too in order to prove category signals alone
+    # (with genuinely zero lexical methods) cannot produce a hit.
+    no_title_ranking_cfg = replace(
+        app.CONFIG, title_ranking=replace(app.CONFIG.title_ranking, enabled=False)
+    )
     payload = app.build_search_query(
         "wireless mouse",
         enable_phrase=False, enable_multi_match=False, enable_fuzzy=False, enable_exact_asin=False,
+        config=no_title_ranking_cfg,
     )
     assert payload["query"] == {"match_none": {}}
 
@@ -223,3 +245,39 @@ def test_dynamic_positive_category_renders_term_on_its_own_field():
     payload = search_service.build_search_query("laptop", intent_signals=signals)
     should = payload["query"]["bool"]["should"]
     assert any(c.get("term", {}).get("main_category", {}).get("value") == "Computers" for c in should)
+
+
+def test_title_ranking_adds_exact_and_prefix_tiers():
+    payload = app.build_search_query("wireless mouse")
+    should = payload["query"]["boosting"]["positive"]["bool"]["must"][0]["bool"]["should"] \
+        if "boosting" in payload["query"] else payload["query"]["bool"]["must"][0]["bool"]["should"]
+    exact_field = app.CONFIG.title_ranking.exact_field
+    assert any(c.get("term", {}).get(exact_field, {}).get("boost") == app.CONFIG.title_ranking.exact_boost for c in should)
+    assert any(
+        c.get("match_phrase_prefix", {}).get("title", {}).get("boost") == app.CONFIG.title_ranking.prefix_boost
+        for c in should
+    )
+    prefix_clause = next(c for c in should if "match_phrase_prefix" in c)
+    assert prefix_clause["match_phrase_prefix"]["title"]["max_expansions"] == app.CONFIG.title_ranking.prefix_max_expansions
+
+
+def test_title_ranking_tiers_present_even_when_phrase_search_disabled():
+    payload = app.build_search_query("wireless mouse", enable_phrase=False)
+    should = payload["query"]["bool"]["must"][0]["bool"]["should"]
+    exact_field = app.CONFIG.title_ranking.exact_field
+    assert any(exact_field in c.get("term", {}) for c in should)
+    assert any("match_phrase_prefix" in c for c in should)
+    assert not any("match_phrase" in c and c.get("match_phrase", {}).get("title") for c in should)
+
+
+def test_title_ranking_disabled_omits_new_tiers(monkeypatch):
+    import services.search_service as search_service
+    from dataclasses import replace
+
+    disabled_cfg = replace(search_service.CONFIG, title_ranking=replace(search_service.CONFIG.title_ranking, enabled=False))
+    payload = search_service.build_search_query("wireless mouse", config=disabled_cfg)
+    should = payload["query"]["bool"]["must"][0]["bool"]["should"] if "bool" in payload["query"] else \
+        payload["query"]["boosting"]["positive"]["bool"]["must"][0]["bool"]["should"]
+    exact_field = search_service.CONFIG.title_ranking.exact_field
+    assert not any(exact_field in c.get("term", {}) for c in should)
+    assert not any("match_phrase_prefix" in c for c in should)

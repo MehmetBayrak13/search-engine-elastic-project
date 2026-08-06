@@ -141,7 +141,12 @@ def test_exact_asin_disabled_flag_skips_bypass_even_if_configured():
 
 
 def test_match_none_is_not_wrapped_in_function_score():
-    app.search_service.CONFIG = _with_quality_ranking(enabled=True)
+    # title_ranking's exact/prefix tiers are an independent lexical method
+    # (gated only by config, not by these enable_* switches), so they must
+    # also be disabled to exercise the true "no lexical method" safety net.
+    cfg = _with_quality_ranking(enabled=True)
+    cfg = dataclasses.replace(cfg, title_ranking=dataclasses.replace(cfg.title_ranking, enabled=False))
+    app.search_service.CONFIG = cfg
     payload = app.build_search_query(
         "kamera",
         enable_phrase=False,

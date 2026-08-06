@@ -303,9 +303,12 @@ def test_lexical_bool_must_preserved_with_page_param():
 def test_exact_asin_preserved_with_page_param():
     payload = app.build_search_query("B000123456", page=2, apply_intent_reranking=False)
     lexical = payload["query"]["bool"]["must"][0]["bool"]["should"]
-    asin_clauses = [c for c in lexical if "term" in c]
-    assert len(asin_clauses) == 1
     field = app.search_service.CONFIG.search_methods.exact_asin.field
+    # `term` clauses also come from the independent title_ranking exact tier
+    # (title.keyword), so filter for the exact-ASIN field specifically
+    # rather than assuming it's the only `term` clause present.
+    asin_clauses = [c for c in lexical if "term" in c and field in c["term"]]
+    assert len(asin_clauses) == 1
     assert asin_clauses[0]["term"][field]["value"] == "B000123456"
 
 
