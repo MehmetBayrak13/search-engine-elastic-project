@@ -157,6 +157,7 @@ def search(
     enable_multi_match: bool = Query(default=True),
     enable_fuzzy: bool = Query(default=True),
     enable_exact_asin: bool = Query(default=True),
+    debug_intent: bool = Query(default=False),
 ):
     config = _require_config()
     query_text = (q or "").strip()
@@ -186,7 +187,7 @@ def search(
         rule = INTENT_RULES[intent_name]
         intent_payload = {"name": intent_name, "label": rule.label, "icon": rule.icon or config.ui.intent_fallback_icon}
 
-    return {
+    response_payload = {
         "query": query_text,
         "total": result.total,
         "hits": [_hit_to_product(hit) for hit in (result.hits or [])],
@@ -199,6 +200,24 @@ def search(
         "has_next": result.has_next,
         "intent": intent_payload,
     }
+
+    if debug_intent:
+        # Opt-in-only ikinci `resolve_intent_signals` çağrısı — `search_products`
+        # zaten dahili olarak aynı hesaplamayı yapar, ama sonucu buraya kadar
+        # taşımaz. Bu tekrar sadece `debug_intent=true` yolunu etkiler; normal
+        # arama isteği ekstra iş yapmaz. `legacy_hard_exclusions` (ham ES
+        # must_not madde sözlükleri) BİLEREK dışarıda bırakılır — bkz.
+        # services/intent_service.py modül docstring'i.
+        signals = search_service.resolve_intent_signals(query_text, include_dynamic=True)
+        response_payload["intent_debug"] = {
+            "matched_rules": list(signals.matched_rule_ids),
+            "positive_categories": [dict(entry) for entry in signals.positive_categories],
+            "negative_categories": [dict(entry) for entry in signals.negative_categories],
+            "dynamic_discovery": list(signals.debug.get("dynamic_discovery", [])),
+            "lexical_required": True,
+        }
+
+    return response_payload
 
 
 @app.get("/api/autocomplete")

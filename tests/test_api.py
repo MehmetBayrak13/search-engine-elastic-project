@@ -116,6 +116,36 @@ def test_autocomplete_success(monkeypatch):
     assert suggestions[0]["asin"] == "B000TEST"
 
 
+def test_search_without_debug_intent_omits_intent_debug(monkeypatch):
+    _mock_post_search(
+        monkeypatch,
+        ({"hits": {"hits": [_hit()], "total": {"value": 1}}}, None),
+    )
+    response = client.get("/api/search", params={"q": "wireless mouse"})
+    assert response.status_code == 200
+    assert "intent_debug" not in response.json()
+
+
+def test_search_with_debug_intent_true_includes_json_safe_payload(monkeypatch):
+    _mock_post_search(
+        monkeypatch,
+        ({"hits": {"hits": [_hit()], "total": {"value": 1}}}, None),
+    )
+    response = client.get("/api/search", params={"q": "iphone case", "debug_intent": True})
+    assert response.status_code == 200
+    body = response.json()
+    assert "intent_debug" in body
+    debug = body["intent_debug"]
+    assert set(debug.keys()) == {"matched_rules", "positive_categories", "negative_categories", "dynamic_discovery", "lexical_required"}
+    assert debug["lexical_required"] is True
+    assert "legacy_hard_exclusions" not in debug
+    import json as json_module
+    import re
+    serialized = json_module.dumps(body)
+    assert "ELASTICSEARCH_API_KEY" not in serialized
+    assert not re.search(r"ApiKey [A-Za-z0-9+/=]{10,}", serialized)
+
+
 def test_autocomplete_elasticsearch_error_becomes_502(monkeypatch):
     # Farklı bir sorgu metni kullanılır: `_fetch_suggestion_hits` process-içi
     # TTL cache'lidir (bkz. api/cache.py) — "wireless" `test_autocomplete_success`
