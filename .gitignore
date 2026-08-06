@@ -10,3 +10,13 @@ import_progress.log
 amazon_import_checkpoint.json
 import_errors.jsonl
 quality_sample_report*.csv
+
+# React / Vite
+frontend/node_modules/
+frontend/dist/
+frontend/.env*
+!frontend/.env.example
+
+# Backend local files
+api/.env*
+!api/.env.example

@@ -1,10 +1,106 @@
 # Amazon Elasticsearch Product Search
 
-Elastic Cloud destekli, Streamlit tabanlı ürün arama uygulaması. Amazon Reviews
-2023 veri setinden indexlenmiş ürünler üzerinde exact ASIN, phrase, multi-field
-ve fuzzy arama; Edge NGram autocomplete; Elasticsearch aggregation tabanlı
+Elastic Cloud destekli ürün arama uygulaması. Amazon Reviews 2023 veri
+setinden indexlenmiş ürünler üzerinde exact ASIN, phrase, multi-field ve
+fuzzy arama; Edge NGram autocomplete; Elasticsearch aggregation tabanlı
 dinamik kategori keşfi; opsiyonel manuel intent override katmanı; `from + size`
 tabanlı sayfalama ve Türkçe→İngilizce sorgu genişletme destekler.
+
+Uygulamanın **birincil** arayüzü artık ayrı bir **React frontend +
+FastAPI backend** ikilisidir (`frontend/`, `api/`) — bkz. "React + FastAPI"
+bölümü hemen aşağıda. Arama/autocomplete/intent/çeviri/kategori-keşif
+mantığının TAMAMI `services/` katmanında yaşar ve Streamlit'e hiçbir zaman
+bağımlı olmadığı için hem eski Streamlit arayüzü (`app.py`, hâlâ çalışır
+durumda, referans/yedek olarak repoda kalır) hem de yeni FastAPI backend'i
+BİREBİR AYNI kod yolunu kullanır — iki arayüz arasında arama davranışı
+sapması yoktur.
+
+## React + FastAPI (yeni — birincil arayüz)
+
+```text
+frontend/   → Vite + React tek sayfa uygulaması (arama kutusu + autocomplete
+              dropdown, sidebar arama ayarları, ürün kartları, sayfalama,
+              light/dark tema)
+api/        → FastAPI backend: services/search_service.py ve
+              services/autocomplete_service.py'yi HTTP üzerinden açar
+              (/api/search, /api/autocomplete, /api/config, /api/health)
+```
+
+### Backend'i çalıştırma
+
+```bash
+pip install -r requirements-api.txt
+
+# Linux / macOS
+export ELASTICSEARCH_URL="https://<deployment>.es.<region>.cloud.es.io"
+export ELASTICSEARCH_API_KEY="<api_key>"
+export ALLOWED_ORIGINS="http://localhost:5173"   # frontend dev server origin(leri), virgülle ayrık
+
+# Windows (PowerShell)
+$env:ELASTICSEARCH_URL="https://<deployment>.es.<region>.cloud.es.io"
+$env:ELASTICSEARCH_API_KEY="<api_key>"
+$env:ALLOWED_ORIGINS="http://localhost:5173"
+
+uvicorn api.main:app --reload --port 8000
+```
+
+`ELASTICSEARCH_URL`/`ELASTICSEARCH_API_KEY` yalnızca backend process'inde
+okunur; frontend'e (tarayıcıya) hiçbir zaman gönderilmez — bkz. `api/main.py`
+`_hit_to_product`/`get_config`, sır İÇERMEYEN alanları döner.
+
+### Frontend'i çalıştırma
+
+```bash
+cd frontend
+npm install
+cp .env.example .env   # VITE_API_BASE_URL, backend adresine göre düzenlenebilir
+npm run dev            # http://localhost:5173
+```
+
+Production build: `npm run build` (`frontend/dist/` — herhangi bir statik
+dosya sunucusuna/CDN'e deploy edilebilir; bkz. aşağıdaki "Deploy" bölümü).
+
+### API sözleşmesi
+
+| Endpoint | Açıklama |
+|---|---|
+| `GET /api/health` | `{"ok": bool, "error": str\|null}` — eksik env değişkeni/config hatası |
+| `GET /api/config` | Sır içermeyen UI config'i (labels, help_text, messages, hero, example_queries, debounce_ms, autocomplete_ui, limits, pagination) |
+| `GET /api/search?q=&page=&enable_phrase=&enable_multi_match=&enable_fuzzy=&enable_exact_asin=` | `search_service.search_products` sonucu (hits her biri `product_url` dahil hazır JSON) |
+| `GET /api/autocomplete?q=` | `autocomplete_service.get_suggestions` sonucu |
+
+Önbellekleme: `api/cache.py`deki basit process-içi TTL cache, `app.py`deki
+`st.cache_data(ttl=...)` sarmalayıcılarının doğrudan karşılığıdır (aynı TTL
+değerleri, aynı config kaynağı).
+
+### Deploy
+
+Backend ve frontend AYRI süreçler/deploy hedefleridir (Streamlit Community
+Cloud'un tek-tık deploy'unun yerini tutan tek bir hedef yoktur):
+
+1. **Backend** (`api/`) — herhangi bir Python/ASGI hosting'ine
+   (`uvicorn api.main:app`) deploy edilebilir. `ELASTICSEARCH_URL`,
+   `ELASTICSEARCH_API_KEY`, `ALLOWED_ORIGINS` (frontend'in gerçek origin'i,
+   örn. `https://mehmetbayrak.com`) ortam değişkeni olarak tanımlanmalı.
+2. **Frontend** (`frontend/`) — `npm run build` çıktısı (`frontend/dist/`)
+   herhangi bir statik dosya hosting'ine deploy edilebilir. Build ANINDA
+   `VITE_API_BASE_URL`'in gerçek backend URL'ine işaret etmesi gerekir (Vite
+   env değişkenlerini build-time'da gömer — deploy sağlayıcısının "environment
+   variables" ayarına eklenmeli).
+3. **Custom domain** (`mehmetbayrak.com`): domain satın alma, DNS kaydı
+   oluşturma ve hosting sağlayıcısı hesabı açma bu ortamın dışında, yalnızca
+   domain'in sahibi tarafından yapılabilecek adımlardır — bkz. proje kökündeki
+   görev notları / son rapor.
+
+Bu üç adım hiçbiri bu görev kapsamında otomatik yapılmadı; hiçbiri geri
+alınamaz/ücretli bir işlem içermeyen "sadece kod" adımı değildir.
+
+## Streamlit arayüzü (eski/referans, hâlâ çalışır)
+
+Aşağıdaki "Kurulum ve çalıştırma" bölümünden itibaren anlatılanlar Streamlit
+arayüzüne (`app.py`) aittir. Kaldırılmadı — `services/`/`config/` katmanı
+paylaşıldığından bakımı ekstra yük getirmez ve React frontend'in davranışını
+doğrulamak için referans olarak kullanılabilir.
 
 ## Kurulum ve çalıştırma
 
