@@ -144,7 +144,7 @@ Arama davranışının tamamı `config/` altındaki JSON dosyalarından okunur �
 | Dosya | İçerik |
 |---|---|
 | `config/search_config.json` | Index adları, timeout/limit değerleri, exact ASIN / phrase / multi-match / fuzzy / autocomplete alan ve boost ayarları, çeviri ayarları, **dinamik kategori keşfi (`dynamic_intent`) ayarları**, **sayfalama (`pagination`) ayarları**, **autocomplete dropdown görsel ayarları (`autocomplete_ui`: panel yüksekliği, satır yüksekliği, görsel gösterme)**, dönen kaynak alanlar, arayüz metinleri |
-| `config/intent_rules.json` | **Opsiyonel override katmanı** (örn. `watch`): alias/tetikleyici terimler, dışlama koşulları, force-boost terimleri, negatif kategoriler (exclusion), rozet metni/ikonu, `priority`. Boş `{}` da geçerlidir — hiç kural olmadan da çalışır; ana kategori-intent motoru bu dosya DEĞİL, dinamik kategori keşfidir (aşağıya bakın). |
+| `config/intent_rules.json` | **Opsiyonel override katmanı** (örn. `watch`, `iphone_case`): alias/tetikleyici terimler (`query_terms`/`all_terms`/`any_terms`), dışlama koşulları (`excluded_when_query_contains`/`excluded_terms`), force-boost terimleri, obje-biçimli `positive_categories`/`negative_categories` (soft penalty), rozet metni/ikonu, `priority`. Boş `{}` da geçerlidir — hiç kural olmadan da çalışır; ana kategori-intent motoru bu dosya DEĞİL, dinamik kategori keşfidir (aşağıya bakın). Bkz. "Kategori + title intent ranking" bölümü. |
 | `config/query_translations.json` | Türkçe ifade/kelime → İngilizce karşılık sözlüğü. Boş `{}` da geçerlidir — çeviri sözlüğü olmadan uygulama, sorguyu değiştirmeden aramaya devam eder. |
 | `config/category_taxonomy.json` | `product_quality.py`nin kullandığı genel ürün-ailesi taksonomisi (12 aile: electronics, beauty, books, automotive, home&kitchen, clothing, toys, pet, grocery, sports, tools, office) — title/category terimleri, aliaslar, `conflicting_families`. |
 | `config/quality_config.json` | `product_quality.py` skorlama ağırlıkları/eşikleri, stopword listesi, flag isimleri. |
@@ -203,6 +203,125 @@ asla bypass etmez, tek başına ürün döndürmez.
   elenir — override, keşfin üzerine biner, onu değiştirmez.
 - `intent_rules.json` tamamen `{}` olsa bile dinamik kategori keşfi normal
   şekilde çalışmaya devam eder (bkz. `tests/test_dynamic_category_discovery.py`).
+
+## Kategori + title intent ranking (`services/intent_service.py`)
+
+Yukarıdaki dinamik kategori keşfi ve `intent_rules.json` override katmanının
+**üzerine binen bir reranking katmanıdır** — yeni bir kategori-tespit
+mekanizması DEĞİLDİR, mevcut iki sinyal kaynağını (manuel kurallar + dinamik
+keşif) birleştirip Elasticsearch sorgusuna nasıl boost/penalty olarak
+yansıyacağını sınırlayan (cap/floor) ve `/api/search`e opsiyonel bir debug
+görünümü ekleyen bir katmandır. Hiçbir mapping/reindex gerektirmez —
+aşağıdaki `title_ranking.exact_field` (`title.keyword`) zaten canlı index'te
+mevcuttu.
+
+- **`services/intent_service.py`** — SAF bir modül (Elasticsearch isteği
+  atmaz, Streamlit'e/`session_state`e bağımlı değildir):
+  - `IntentSignals` (frozen dataclass): `positive_categories`,
+    `negative_categories`, `matched_rule_ids`, `legacy_hard_exclusions`,
+    `debug` alanlarını taşır. `legacy_hard_exclusions` hazır ES `must_not`
+    madde sözlükleridir ve BİLEREK debug response'a sızdırılmaz (aşağıya
+    bakın).
+  - `detect_search_intent(query_text, manual_rules)` — UI rozeti için tek
+    bir niyet döner (yalnızca orijinal sorguyu kullanır, ilk eşleşen kuralda
+    durur); mevcut davranışla birebir aynıdır.
+  - `resolve_intent_signals(query, translated_queries, manual_rules,
+    discovered_categories, *, config=None)` — manuel kural eşleşmelerini VE
+    zaten hesaplanmış dinamik keşif adaylarını girdi olarak alıp birleştiren
+    SAF fonksiyon; kendisi ne çeviri yapar ne de ES'e istek atar. I/O'yu
+    (çeviri genişletme + dinamik keşif aggregation isteği) yapıp bu
+    fonksiyona besleyen orkestratör `services/search_service.resolve_intent_signals(query_text,
+    include_dynamic=True, *, fetch_aggregations=None, config=None)`dür.
+
+- **`config/intent_rules.json` şema genişletmesi** — legacy alanlar
+  (`query_terms`, `excluded_when_query_contains`) hâlâ çalışır; yanlarına
+  eklenen yeni alanlar:
+  - `all_terms` (hepsi eşleşmeli, AND) / `any_terms` (`query_terms`in yeni
+    adı, OR — biri boşsa diğeri kullanılır) / `excluded_terms`
+    (`excluded_when_query_contains`in yeni adı).
+  - `positive_categories`: yeni obje-listesi biçimi, `{"value": ..., "boost":
+    ...}` — eski `category_boost_terms`/`category_boost` alanlarının
+    yanında, ona ek olarak kullanılabilir (ikisi de aynı anda toplanır).
+  - `negative_categories`: **çift biçimli** — bir kuralın listesindeki TÜM
+    öğeler ya düz string (legacy) ya da TÜMÜ `{"value": ..., "penalty":
+    0-1}` nesnesi (yeni) olmalı; **karışık liste config yüklenirken
+    reddedilir** (`config._build_negative_categories`, `ConfigError`).
+    - Düz string (legacy) → değişmeden aynı sert dışlama: her değer, ilgili
+      alanlar (`main_category`/`source_category`/`categories`/
+      `categories_text`/`categories_text.tr`) üzerinde bir `bool.must_not`
+      maddesine dönüşür (bkz. `watch` kuralının `books`/`book` dışlaması —
+      davranışı DEĞİŞMEDİ).
+    - Obje (yeni, `penalty` 0-1) → sonucu tamamen ELEMEYEN yumuşak bir
+      düşürme: `intent_ranking.negative_penalty_floor` ile taban değere
+      kelepçelenmiş bir Elasticsearch `boosting.negative` sarmalayıcısı
+      üretir (bkz. `services/search_service.py:_soft_negative_boosting_negative_clause`)
+      — `must_not`a asla girmez, yalnızca skoru düşürür.
+    - Örnek (`config/intent_rules.json`daki `iphone_case` kuralı, yeni
+      biçimlerin tümünü gösterir):
+      ```json
+      "iphone_case": {
+        "all_terms": ["iphone", "case"],
+        "positive_categories": [
+          {"value": "Cases", "boost": 3.0},
+          {"value": "Cell Phones & Accessories", "boost": 1.8}
+        ],
+        "negative_categories": [
+          {"value": "Cell Phones", "penalty": 0.5}
+        ]
+      }
+      ```
+
+- **`config/search_config.json:title_ranking`** — lexical arama grubuna iki
+  yeni katman ekler: `title.keyword` üzerinde exact `term` eşleşmesi
+  (`exact_field`/`exact_boost`) ve `match_phrase_prefix`
+  (`prefix_boost`/`prefix_max_expansions`). Yalnızca `title_ranking.enabled`
+  ile kontrol edilir — `enable_phrase` switch'inden TAMAMEN BAĞIMSIZDIR
+  (phrase kapalıyken bile exact/prefix katmanları açık kalabilir; bkz.
+  `services/search_service.py` "Title katmanlı skorlama" yorumu). Hiçbir
+  reindex gerekmedi: `title.keyword` alanı zaten canlı index mapping'inde
+  vardı.
+
+- **`config/search_config.json:intent_ranking`** — manuel/dinamik kategori
+  sinyallerinin toplam etkisini sınırlar: `manual_category_boost_cap` ve
+  `dynamic_category_boost_cap`, ilgili kaynağın topladığı boost'lar tavanı
+  aşarsa oransal olarak küçültülür (`intent_service._apply_cap`);
+  `negative_penalty_floor`, soft negatif penalty çarpanının hiçbir zaman bu
+  değerin altına inemeyeceği bir taban koyar — bir sonuç asla tamamen
+  silinmez. `enabled: false` iken cap/floor uygulanmaz (ham boost/penalty
+  değerleri kullanılır).
+
+- **`GET /api/search?debug_intent=true`** — varsayılanı `false`,
+  geliştirme/debug amaçlı opsiyonel bir parametredir. `true` iken yanıta bir
+  `intent_debug` anahtarı eklenir:
+  ```json
+  {
+    "matched_rules": ["iphone_case"],
+    "positive_categories": [{"value": "Cases", "boost": 3.0, "source": "manual", "field": "categories_text"}],
+    "negative_categories": [{"value": "Cell Phones", "penalty": 0.5, "source": "manual"}],
+    "dynamic_discovery": [],
+    "lexical_required": true
+  }
+  ```
+  JSON-safe'dir (yalnızca primitive/list/dict), sır içermez ve ham
+  Elasticsearch query DSL'i asla döndürmez — `legacy_hard_exclusions` (hazır
+  `must_not` madde sözlükleri) bu yanıttan BİLEREK dışarıda bırakılır (bkz.
+  `api/main.py`, `services/intent_service.py` modül docstring'i).
+
+- **`tools/evaluate_intent_ranking.py`** — `evaluate_quality_sample.py` ile
+  aynı env değişkenlerini (`ELASTICSEARCH_URL`, `ELASTICSEARCH_API_KEY`)
+  kullanan, read-only, offline bir before/after değerlendirme scriptidir. 10
+  sabit sorguyu ("wireless mouse", "iphone case", "running shoes" ...) hem
+  `title_ranking`/`intent_ranking` kapalıyken ("before") hem de repodaki
+  gerçek config'le ("after") gerçek Elasticsearch cluster'ına karşı çalıştırıp
+  karşılaştırmalı bir rapor üretir. Hiçbir belgeyi indexlemez/günceller/silmez:
+
+  ```bash
+  python tools/evaluate_intent_ranking.py --output report.json
+  python tools/evaluate_intent_ranking.py --output report.csv --format csv
+  ```
+
+Bu bölümdeki hiçbir değişiklik için Elasticsearch mapping/reindex
+gerekmedi.
 
 ## Sayfalama (Pagination)
 
@@ -395,6 +514,12 @@ ve eşikler `config/quality_config.json`dan gelir.
   bir `SearchResult` (`hits`/`total`/`error`/`current_page`/`page_size`/
   `total_pages`/`start_item`/`end_item`/`has_previous`/`has_next`) döner
   (bkz. yukarıdaki "Sayfalama" bölümü, tip tanımı `services/search_models.py`de).
+- **`services/intent_service.py`** — kategori + title intent sinyallerini
+  SAF biçimde çözümler (`IntentSignals`, `detect_search_intent`,
+  `resolve_intent_signals`); bkz. yukarıdaki "Kategori + title intent
+  ranking" bölümü. `search_service.py`, çeviri genişletme ve dinamik
+  keşfin ES isteği gibi I/O'yu kendi içinde yapıp sonucu bu modüle girdi
+  olarak verir.
 - **`services/autocomplete_service.py`** — Edge NGram autocomplete sorgusu
   (`build_autocomplete_query`) ve öneri listesi üretimi (`get_suggestions`,
   `SuggestionItem` listesi döner). `search_service`e her zaman MODÜL
@@ -432,6 +557,9 @@ ve eşikler `config/quality_config.json`dan gelir.
 - **`evaluate_quality_sample.py`** — Elasticsearch'ten read-only örnek çekip
   kalite raporu (CSV/JSONL) üreten offline analiz aracı; hiçbir belgeyi
   güncellemez.
+- **`tools/evaluate_intent_ranking.py`** — kategori + title intent ranking
+  için read-only before/after değerlendirme aracı; bkz. yukarıdaki
+  "Kategori + title intent ranking" bölümü.
 
 Index mapping/analyzer tanımları (Edge NGram, Türkçe analyzer vb.) bu depoda
 değil, doğrudan Elastic Cloud cluster'ında (Kibana Dev Tools üzerinden)
