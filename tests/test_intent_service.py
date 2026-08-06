@@ -104,6 +104,53 @@ def test_negative_penalty_floor_clamps_low_penalty():
     assert signals.negative_categories[0]["penalty"] >= floor
 
 
+def test_legacy_category_boost_terms_carry_distinct_text_and_tr_boosts():
+    """Final-review fix (Finding 1): pre-branch behavior emitted TWO
+    different boosted clauses per `category_boost_terms` entry —
+    `categories_text` at `rule.category_boost` (12 for `watch`) and
+    `categories_text.tr` at `rule.category_boost_tr` (8 for `watch`). The
+    branch had collapsed this into a single boost value reused on both
+    fields, silently changing `watch`'s ranking behavior. `intent_ranking`
+    is disabled here to bypass cap scaling and assert the raw per-entry
+    values the renderer receives, matching pre-branch behavior exactly."""
+    from dataclasses import replace
+
+    rules = {"watch": _rule(
+        "watch",
+        query_terms=("watch",),
+        category_boost_terms=("watches", "smartwatch"),
+        category_boost=12,
+        category_boost_tr=8,
+    )}
+    cfg = replace(
+        intent_service.CONFIG,
+        intent_ranking=replace(intent_service.CONFIG.intent_ranking, enabled=False),
+    )
+    signals = resolve_intent_signals("watch", [], rules, [], config=cfg)
+    manual = [c for c in signals.positive_categories if c["source"] == "manual"]
+    assert len(manual) == 2
+    for entry in manual:
+        assert entry["boost"] == 12
+        assert entry["boost_tr"] == 8
+
+
+def test_new_schema_positive_categories_still_use_single_boost_for_both_fields():
+    """Contrast case for Finding 1: the NEW `positive_categories` schema
+    field (e.g. `iphone_case`'s `{"value": "Cases", "boost": 3.0}`) must
+    remain unchanged — one boost value, no separate `_tr` key, per spec
+    §3 ("applied to both fields, no separate _tr key needed")."""
+    rules = {"iphone_case": _rule(
+        "iphone_case",
+        all_terms=("iphone", "case"),
+        positive_categories=(CategoryBoostEntry(value="Cases", boost=3.0),),
+    )}
+    signals = resolve_intent_signals("iphone case", [], rules, [])
+    manual = [c for c in signals.positive_categories if c["source"] == "manual"]
+    assert len(manual) == 1
+    assert manual[0]["boost"] == 3.0
+    assert "boost_tr" not in manual[0]
+
+
 def test_manual_category_boost_cap_scales_down_sum():
     cfg = intent_service.CONFIG
     cap = cfg.intent_ranking.manual_category_boost_cap

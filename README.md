@@ -309,11 +309,20 @@ mevcuttu.
 
 - **`tools/evaluate_intent_ranking.py`** — `evaluate_quality_sample.py` ile
   aynı env değişkenlerini (`ELASTICSEARCH_URL`, `ELASTICSEARCH_API_KEY`)
-  kullanan, read-only, offline bir before/after değerlendirme scriptidir. 10
-  sabit sorguyu ("wireless mouse", "iphone case", "running shoes" ...) hem
-  `title_ranking`/`intent_ranking` kapalıyken ("before") hem de repodaki
-  gerçek config'le ("after") gerçek Elasticsearch cluster'ına karşı çalıştırıp
-  karşılaştırmalı bir rapor üretir. Hiçbir belgeyi indexlemez/günceller/silmez:
+  kullanan, read-only, offline bir before/after değerlendirme scriptidir.
+  11 sabit sorguyu ("wireless mouse", "iphone case", "running shoes", ...,
+  "smartwatch") hem `title_ranking`/`intent_ranking` kapalıyken ("before")
+  hem de repodaki gerçek config'le ("after") gerçek Elasticsearch
+  cluster'ına karşı çalıştırıp karşılaştırmalı bir rapor üretir. Hiçbir
+  belgeyi indexlemez/günceller/silmez. **Önemli:** "before" etiketi
+  özelliğin tamamen kapalı olduğu bir dal-öncesi durum değildir —
+  `intent_ranking.enabled=false` yalnızca cap/floor skalalamasını
+  (`_apply_cap`/`_apply_penalty_floor`) atlar; manuel/dinamik kategori
+  sinyalleri "before"da da tam olarak tetiklenir, sadece sınırsız kalır.
+  "before" = yeni sinyaller açık ama sınırlanmamış, "after" = aynı
+  sinyaller sınırlanmış. `intent_rules.json`'daki manuel kural seti her iki
+  varyantta da aynıdır (bkz. `tools/evaluate_intent_ranking.py` modül
+  docstring'i):
 
   ```bash
   python tools/evaluate_intent_ranking.py --output report.json

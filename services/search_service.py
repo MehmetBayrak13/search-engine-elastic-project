@@ -513,13 +513,26 @@ def _positive_category_should_clauses(positive_categories: tuple[dict, ...]) -> 
     metin olabileceğinden her iki metin alanında (`categories_text` +
     `.tr`) `match_phrase` ile aranır; `dynamic` kaynaklı girdiler zaten
     tek, yetkili bir aggregation alanına (`field`) bağlı olduğundan yalnızca
-    o keyword alanında `term` ile aranır."""
+    o keyword alanında `term` ile aranır.
+
+    `manual` girdiler opsiyonel bir `boost_tr` taşıyabilir: legacy
+    `category_boost_terms` (bkz. intent_service.resolve_intent_signals)
+    `categories_text` için `boost`, `categories_text.tr` için AYRI
+    `boost_tr` üretir — pre-branch davranışı (`watch` kuralı için 12/8)
+    aynen korunur. `boost_tr` yoksa (yeni obje-biçimli `positive_categories`
+    şeması, örn. `iphone_case`'in `Cases` girdisi) iki alan da AYNI `boost`
+    değerini kullanır — bkz. tasarım §3 ("applied to both fields, no
+    separate _tr key needed")."""
     clauses: list[dict] = []
     for entry in positive_categories:
         if entry["source"] == "manual":
+            field_boosts = {
+                "categories_text": entry["boost"],
+                "categories_text.tr": entry.get("boost_tr", entry["boost"]),
+            }
             for text_field in _POSITIVE_CATEGORY_TEXT_FIELDS:
                 clauses.append({
-                    "match_phrase": {text_field: {"query": entry["value"], "boost": entry["boost"]}}
+                    "match_phrase": {text_field: {"query": entry["value"], "boost": field_boosts[text_field]}}
                 })
         else:  # "dynamic" — single, authoritative field from the aggregation bucket
             clauses.append({

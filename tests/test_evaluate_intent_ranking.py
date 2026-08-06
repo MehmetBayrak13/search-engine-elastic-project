@@ -52,4 +52,5 @@ def test_default_queries_match_evaluation_spec():
         "wireless mouse", "iphone case", "running shoes", "gaming keyboard",
         "coffee maker", "dog food", "laptop stand", "usb c cable",
         "phone charger", "bluetooth headphones",
+        "smartwatch",
     ]

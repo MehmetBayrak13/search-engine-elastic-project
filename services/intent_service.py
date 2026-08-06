@@ -115,11 +115,22 @@ def _legacy_hard_exclusion_clause(value: str) -> dict:
 
 
 def _apply_cap(entries: list[dict], cap: float) -> list[dict]:
+    """Scales `boost` (and, when present, `boost_tr` — legacy
+    `category_boost_terms` entries carry both) down proportionally so their
+    sum stays within `cap`. Scaling `boost_tr` by the same factor as `boost`
+    keeps the categories_text/categories_text.tr ratio intact under capping
+    instead of leaving `boost_tr` un-scaled."""
     total = sum(entry["boost"] for entry in entries)
     if total <= cap or total <= 0:
         return entries
     scale = cap / total
-    return [{**entry, "boost": round(entry["boost"] * scale, 6)} for entry in entries]
+    scaled: list[dict] = []
+    for entry in entries:
+        new_entry = {**entry, "boost": round(entry["boost"] * scale, 6)}
+        if "boost_tr" in new_entry:
+            new_entry["boost_tr"] = round(new_entry["boost_tr"] * scale, 6)
+        scaled.append(new_entry)
+    return scaled
 
 
 def _apply_penalty_floor(entries: list[dict], floor: float) -> list[dict]:
@@ -151,8 +162,19 @@ def resolve_intent_signals(
         matched_rule_ids.append(name)
 
         for term in rule.category_boost_terms:
+            # Legacy `category_boost_terms` entries carry BOTH boosts through
+            # (`boost` for categories_text, `boost_tr` for categories_text.tr)
+            # — pre-branch behavior applied two DIFFERENT boost values here
+            # (12/8 for the `watch` rule). `_positive_category_should_clauses`
+            # reads `boost_tr` when present; new-schema `positive_categories`
+            # entries below deliberately omit it, so they keep the single
+            # shared-boost behavior spec'd for that field (see design §3).
             manual_positive.append({
-                "value": term, "boost": rule.category_boost, "source": "manual", "field": "categories_text",
+                "value": term,
+                "boost": rule.category_boost,
+                "boost_tr": rule.category_boost_tr,
+                "source": "manual",
+                "field": "categories_text",
             })
         for entry in rule.positive_categories:
             manual_positive.append({

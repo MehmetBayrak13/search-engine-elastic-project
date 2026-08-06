@@ -235,6 +235,34 @@ def test_manual_positive_category_renders_categories_text_and_tr():
     assert {"categories_text", "categories_text.tr"} <= fields_hit
 
 
+def test_legacy_manual_positive_category_renders_distinct_text_and_tr_boosts():
+    """Final-review fix (Finding 1): a legacy `category_boost_terms` entry
+    (carrying an explicit `boost_tr`) must render DIFFERENT boost values on
+    `categories_text` (12) and `categories_text.tr` (8) — restoring
+    pre-branch `watch`-rule behavior. Contrast with
+    `test_manual_positive_category_renders_categories_text_and_tr` above,
+    where the entry has no `boost_tr` key (new `positive_categories`
+    schema) and both fields correctly get the SAME boost."""
+    from services.intent_service import IntentSignals
+    import services.search_service as search_service
+
+    signals = IntentSignals(
+        positive_categories=(
+            {"value": "watches", "boost": 12, "boost_tr": 8, "source": "manual", "field": "categories_text"},
+        ),
+        matched_rule_ids=("watch",),
+    )
+    payload = search_service.build_search_query("smartwatch", intent_signals=signals)
+    should = payload["query"]["bool"]["should"]
+    boosts = {
+        list(c["match_phrase"].keys())[0]: list(c["match_phrase"].values())[0]["boost"]
+        for c in should
+        if "match_phrase" in c
+    }
+    assert boosts["categories_text"] == 12
+    assert boosts["categories_text.tr"] == 8
+
+
 def test_dynamic_positive_category_renders_term_on_its_own_field():
     from services.intent_service import IntentSignals
     import services.search_service as search_service
