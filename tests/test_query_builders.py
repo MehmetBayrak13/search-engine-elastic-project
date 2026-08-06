@@ -115,6 +115,33 @@ def test_autocomplete_result_size_defaults_from_config():
     assert payload["size"] == app.CONFIG.limits.autocomplete_fetch_size
 
 
+def test_autocomplete_should_includes_manual_positive_categories_from_new_schema():
+    """`iphone_case` kuralının obje-biçimli `positive_categories` alanı (Task 1
+    şeması), `category_boost_terms`'ün her zaman yaptığı gibi autocomplete
+    sorgusunun dış bool.should'una da yansımalı — bu, autocomplete_service.py
+    artık intent_service.resolve_intent_signals + search_service._positive_category_should_clauses
+    üzerinden geçtiği için kasıtlı ve kilitlenmesi gereken bir davranıştır
+    (bkz. Task 4/5 review fix: önceden hem normal aramada hem autocomplete'te
+    ölü/kullanılmayan bir alandı)."""
+    payload = app.build_autocomplete_query("iphone case")
+    should = payload["query"]["bool"]["should"]
+
+    cases_clauses = [
+        clause
+        for clause in should
+        if "match_phrase" in clause
+        and any(body.get("query") == "Cases" for body in clause["match_phrase"].values())
+    ]
+    fields_hit = {list(clause["match_phrase"].keys())[0] for clause in cases_clauses}
+    assert {"categories_text", "categories_text.tr"} <= fields_hit
+
+    # Soft negatif (`Cell Phones`, penalty 0.5) autocomplete'te kasıtlı olarak
+    # yok sayılır — autocomplete'in sorgu şekli düz `bool` kalır, `boosting`
+    # sarmalayıcısı YOKTUR (dinamik keşif gibi bilerek dahil edilmeyen bir
+    # özellik; bkz. build_autocomplete_query docstring'i).
+    assert "boosting" not in payload["query"]
+
+
 def test_detect_search_intent_watch():
     info = app.detect_search_intent("erkek kol saati")
     assert info["intent"] == "watch"
