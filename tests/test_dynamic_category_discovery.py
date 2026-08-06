@@ -117,10 +117,8 @@ def test_discovery_failure_does_not_break_normal_search(monkeypatch):
     assert candidates == []
 
     # search_products'ın kullandığı üst seviye fonksiyon da patlamamalı.
-    boost_queries, exclusions = app.resolve_intent_signals("toilet paper", include_dynamic=True)
-    payload = app.build_search_query(
-        "toilet paper", intent_boost_queries=boost_queries, intent_exclusions=exclusions
-    )
+    signals = app.resolve_intent_signals("toilet paper", include_dynamic=True)
+    payload = app.build_search_query("toilet paper", intent_signals=signals)
     assert payload["query"]["bool"]["must"], "lexical grup hâlâ zorunlu kalmalı"
 
 
@@ -129,10 +127,8 @@ def test_dynamic_boosts_under_should_lexical_under_must(monkeypatch):
         monkeypatch,
         {app.INDEX_NAME: ({"aggregations": AGGREGATIONS_WITH_TOILET_PAPER}, None)},
     )
-    boost_queries, exclusions = app.resolve_intent_signals("toilet paper", include_dynamic=True)
-    payload = app.build_search_query(
-        "toilet paper", intent_boost_queries=boost_queries, intent_exclusions=exclusions
-    )
+    signals = app.resolve_intent_signals("toilet paper", include_dynamic=True)
+    payload = app.build_search_query("toilet paper", intent_signals=signals)
     must = payload["query"]["bool"]["must"]
     should = payload["query"]["bool"].get("should", [])
 

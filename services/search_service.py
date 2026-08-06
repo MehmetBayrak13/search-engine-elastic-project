@@ -23,13 +23,14 @@ modülü değiştirdiğinde `autocomplete_service`'teki eski kopya etkilenmez.
 from __future__ import annotations
 
 import os
-import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import requests
 
 from config import ConfigError, load_intent_rules, load_search_config, load_translations
+from services import intent_service
+from services.intent_service import IntentSignals
 from services.search_models import PaginationLimitError, SearchResult
 
 if TYPE_CHECKING:
@@ -51,7 +52,6 @@ __all__ = [
     "build_category_discovery_query",
     "fetch_category_aggregations",
     "discover_category_intent",
-    "build_dynamic_category_boosts",
     "resolve_intent_signals",
     "build_search_query",
     "search_products",
@@ -89,91 +89,9 @@ SOURCE_FIELDS = list(CONFIG.source_fields.search) if CONFIG else []
 # genişletilebilir bir yapı sağlar: yeni bir intent eklemek için kod
 # değiştirmeye gerek yoktur, JSON dosyasına yeni bir kural eklemek yeterlidir.
 def detect_search_intent(query_text: str) -> dict:
-    """
-    Sorgu metninden kategori niyetini tespit eder (casefold ile normalize).
-
-    Dönüş:
-      {"intent": <ad|None>, "apply_exclusion": <bool>, "rule": <IntentRule|None>}
-
-    Kural: niyet terimlerinden biri geçiyorsa niyet algılanır. Ancak sorguda
-    dışlama tetikleyici bir terim (ör. "book") de varsa niyet algılanır fakat
-    dışlama UYGULANMAZ (ör. hem tetikleyici hem dışlama terimi aynı sorguda
-    geçerse dışlama iptal edilir; kurallar tamamen config'ten gelir).
-    """
-    text = (query_text or "").casefold()
-
-    for name, rule in INTENT_RULES.items():
-        if not rule.enabled:
-            continue
-
-        hit = any(_contains_term(text, t) for t in rule.query_terms)
-        if not hit:
-            continue
-
-        blocked = any(_contains_term(text, t) for t in rule.excluded_when_query_contains)
-        return {
-            "intent": name,
-            "apply_exclusion": not blocked,
-            "rule": rule,
-        }
-
-    return {"intent": None, "apply_exclusion": False, "rule": None}
-
-
-def _contains_term(text: str, term: str) -> bool:
-    """
-    `term`'in `text` içinde kelime sınırıyla geçip geçmediğini kontrol eder
-    (casefold edilmiş metin beklenir). Çok kelimeli terimler alt-dizi olarak aranır.
-    """
-    term = term.casefold()
-    if " " in term:
-        return term in text
-    # Tek kelime: kelime sınırı ile ara (ör. bir terim, o terimi içeren daha
-    # uzun bir kelimenin alt dizesi olarak yanlışlıkla eşleşmesin).
-    return re.search(rf"(?<!\w){re.escape(term)}(?!\w)", text) is not None
-
-
-def _build_intent_signals(query_text: str):
-    """
-    Sorgudan kategori-intent boost ve dışlama sorgularını üretir (paylaşılan
-    mantık; hem normal arama hem autocomplete önerileri kullanır).
-
-    Dönüş: (intent_boost_queries, intent_exclusions)
-    Bu sorgular tek başına belge döndürmez; yalnızca ana eşleşmenin üzerine
-    reranking/dışlama sinyali ekler.
-    """
-    intent_boost_queries = []
-    intent_exclusions = []
-    info = detect_search_intent(query_text)
-    rule = info.get("rule")
-    if rule:
-        for term in rule.category_boost_terms:
-            intent_boost_queries.append({
-                "match_phrase": {"categories_text": {"query": term, "boost": rule.category_boost}}
-            })
-            intent_boost_queries.append({
-                "match_phrase": {"categories_text.tr": {"query": term, "boost": rule.category_boost_tr}}
-            })
-        if info.get("apply_exclusion"):
-            # Kitap belgeleri bazen yalnızca main_category/source_category
-            # üzerinden kategori taşıyor (categories/categories_text boş olabiliyor).
-            # Bu yüzden dışlamayı tüm ilgili alanlara uygula: keyword alanlarda
-            # term, text alanlarda match_phrase. Her terim için bir bool.should
-            # (minimum_should_match=1) bloğu must_not'a eklenir.
-            for term in rule.negative_categories:
-                intent_exclusions.append({
-                    "bool": {
-                        "should": [
-                            {"term": {"main_category": term}},
-                            {"term": {"source_category": term}},
-                            {"term": {"categories": term}},
-                            {"match_phrase": {"categories_text": {"query": term}}},
-                            {"match_phrase": {"categories_text.tr": {"query": term}}},
-                        ],
-                        "minimum_should_match": 1,
-                    }
-                })
-    return intent_boost_queries, intent_exclusions
+    """UI rozeti için tek niyet döner — bkz. intent_service.detect_search_intent
+    docstring'i (yalnızca orijinal sorgu, ilk eşleşen kuralda durur)."""
+    return intent_service.detect_search_intent(query_text, INTENT_RULES)
 
 
 # ---------------------------------------------------------------------------
@@ -453,65 +371,32 @@ def discover_category_intent(
     return candidates[: dyn.max_category_candidates]
 
 
-def build_dynamic_category_boosts(candidates: list[dict]) -> list[dict]:
-    """
-    Kategori keşif adaylarını, ana ürün sorgusunun bool.should (rerank-only)
-    kısmına eklenecek boost sorgularına çevirir. `aggregation_fields`
-    (categories/main_category/source_category) her zaman keyword-uyumlu
-    olduğundan `term` sorgusu kullanılır. Bu sinyaller tek başına belge
-    döndürmez; yalnızca zaten lexical olarak eşleşmiş ürünleri yeniden sıralar.
-    """
-    if not candidates:
-        return []
-
-    boost = CONFIG.dynamic_intent.boost
-    return [
-        {"term": {candidate["field"]: {"value": candidate["value"], "boost": boost}}}
-        for candidate in candidates
-    ]
-
-
 def resolve_intent_signals(
     query_text: str,
     include_dynamic: bool = True,
     *,
     fetch_aggregations=None,
     config: "AppConfig | None" = None,
-):
-    """
-    Manuel intent kuralları (`intent_rules.json`) ile dinamik kategori
-    keşfini birleştiren ana giriş noktası. `intent_rules.json` artık ana
-    motor DEĞİLDİR; yalnızca dinamik keşfin üzerine binen opsiyonel bir
-    override katmanıdır:
-      - bir kuralın `negative_categories`'i (exclusions) aktifse, dinamik
-        keşfin önerdiği aynı değerdeki kategori adayları da elenir
-        (override, keşfi çelmeyecek şekilde bastırır).
-      - `include_dynamic=False` yalnızca autocomplete tarafından kullanılır
-        (dinamik keşif autocomplete'te ÇALIŞMAZ).
+) -> IntentSignals:
+    """Manuel kurallar + dinamik kategori keşfini birleştiren ana giriş
+    noktası. Çeviri genişletmesi ve dinamik keşfin ES aggregation çağrısı
+    (I/O) burada yapılır; SAF birleştirme mantığı `intent_service`'e
+    devredilir (bkz. modül docstring'i)."""
+    cfg = config or CONFIG
+    expansion = expand_multilingual_query(query_text)
+    translated_queries = expansion["phrase_translations"] + expansion["token_translations"]
+    if expansion["normalized_query"] and expansion["normalized_query"] != expansion["original_query"]:
+        translated_queries = [expansion["normalized_query"]] + translated_queries
 
-    `config`: kabul edilir ama (Task 3 itibarıyla) henüz KULLANILMAZ — bu
-    fonksiyonun içi hâlâ modül seviyesi `CONFIG`'i okur. Parametre yalnızca
-    `search_products`'ın `config=cfg` aktarabilmesi için burada durur;
-    gerçek kablolama (dinamik keşfe `config` aktarımı, `CONFIG.dynamic_intent`
-    yerine `cfg.dynamic_intent` kullanımı) Task 4'te yapılır.
+    discovered_categories: list[dict] = []
+    if include_dynamic and cfg.dynamic_intent.enabled:
+        discovered_categories = discover_category_intent(
+            query_text, fetch_aggregations=fetch_aggregations, config=cfg
+        )
 
-    Dönüş: (boost_queries, exclusions) — build_search_query'nin bool.should
-    ve bool.must_not'una doğrudan eklenir.
-    """
-    info = detect_search_intent(query_text)
-    boost_queries, exclusions = _build_intent_signals(query_text)
-
-    if include_dynamic and CONFIG.dynamic_intent.enabled:
-        rule = info.get("rule")
-        blocked_values = set()
-        if rule and info.get("apply_exclusion"):
-            blocked_values = {value.casefold() for value in rule.negative_categories}
-
-        candidates = discover_category_intent(query_text, fetch_aggregations=fetch_aggregations)
-        candidates = [c for c in candidates if str(c["value"]).casefold() not in blocked_values]
-        boost_queries = boost_queries + build_dynamic_category_boosts(candidates)
-
-    return boost_queries, exclusions
+    return intent_service.resolve_intent_signals(
+        query_text, translated_queries, INTENT_RULES, discovered_categories, config=cfg
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -619,6 +504,50 @@ def _normalize_page(page: int) -> int:
     return page if page >= 1 else 1
 
 
+_POSITIVE_CATEGORY_TEXT_FIELDS = ("categories_text", "categories_text.tr")
+
+
+def _positive_category_should_clauses(positive_categories: tuple[dict, ...]) -> list[dict]:
+    """`IntentSignals.positive_categories` içindeki her girdiyi bool.should
+    (rerank-only) maddesine çevirir. `manual` kaynaklı girdiler serbest
+    metin olabileceğinden her iki metin alanında (`categories_text` +
+    `.tr`) `match_phrase` ile aranır; `dynamic` kaynaklı girdiler zaten
+    tek, yetkili bir aggregation alanına (`field`) bağlı olduğundan yalnızca
+    o keyword alanında `term` ile aranır."""
+    clauses: list[dict] = []
+    for entry in positive_categories:
+        if entry["source"] == "manual":
+            for text_field in _POSITIVE_CATEGORY_TEXT_FIELDS:
+                clauses.append({
+                    "match_phrase": {text_field: {"query": entry["value"], "boost": entry["boost"]}}
+                })
+        else:  # "dynamic" — single, authoritative field from the aggregation bucket
+            clauses.append({
+                "term": {entry["field"]: {"value": entry["value"], "boost": entry["boost"]}}
+            })
+    return clauses
+
+
+def _soft_negative_boosting_negative_clause(negative_categories: tuple[dict, ...]) -> tuple[dict | None, float]:
+    """Soft negatif kategori girdilerinden `boosting.negative` bloğunu ve
+    tek skaler `negative_boost` değerini üretir (en güçlü — en düşük —
+    penalty). Girdi boşsa (None, 1.0) döner (no-op)."""
+    if not negative_categories:
+        return None, 1.0
+    should = []
+    for entry in negative_categories:
+        value = entry["value"]
+        should.extend([
+            {"term": {"main_category": value}},
+            {"term": {"source_category": value}},
+            {"term": {"categories": value}},
+            {"match_phrase": {"categories_text": {"query": value}}},
+            {"match_phrase": {"categories_text.tr": {"query": value}}},
+        ])
+    negative_boost = min(entry["penalty"] for entry in negative_categories)
+    return {"bool": {"should": should, "minimum_should_match": 1}}, negative_boost
+
+
 def build_search_query(
     query_text: str,
     enable_phrase: bool = True,
@@ -630,8 +559,7 @@ def build_search_query(
     page_size: int | None = None,
     track_total_hits: bool | None = None,
     apply_intent_reranking: bool = True,
-    intent_boost_queries: list[dict] | None = None,
-    intent_exclusions: list[dict] | None = None,
+    intent_signals: "IntentSignals | None" = None,
     *,
     config: "AppConfig | None" = None,
 ) -> dict:
@@ -643,11 +571,11 @@ def build_search_query(
     SAF (I/O yapmaz) bir fonksiyondur — Elasticsearch'e istek atmaz. Dinamik
     kategori keşfi (Elasticsearch aggregation isteği gerektirir) burada değil,
     `search_products` içinde `resolve_intent_signals` ile hesaplanır ve
-    sonucu `intent_boost_queries`/`intent_exclusions` olarak bu fonksiyona
-    enjekte edilir. Bu ikisi `None` bırakılırsa (varsayılan çağrı biçimi),
-    yalnızca manuel `intent_rules.json` kuralları (`_build_intent_signals`,
-    saf) kullanılır — böylece bu fonksiyon testlerde ağ çağrısı yapmadan
-    doğrudan çağrılabilir.
+    sonucu `intent_signals` (bir `IntentSignals`) olarak bu fonksiyona enjekte
+    edilir. `intent_signals` `None` bırakılırsa (varsayılan çağrı biçimi),
+    yalnızca manuel `intent_rules.json` kuralları (`intent_service.resolve_intent_signals`,
+    çeviri varyantı/dinamik aday olmadan, saf) kullanılır — böylece bu
+    fonksiyon testlerde ağ çağrısı yapmadan doğrudan çağrılabilir.
 
     Lexical yöntemler (aç/kapa):
       A) parent_asin exact `term`   (enable_exact_asin)
@@ -657,8 +585,12 @@ def build_search_query(
 
     Yapı:
       bool.must   → [ bool.should=lexical (+ çeviri alternatifleri), minimum_should_match=1 ]
-      bool.should → intent kategori boostları (manuel + dinamik; yalnızca sıralamayı iyileştirir)
-      bool.must_not → intent dışlamaları (kontrollü)
+      bool.should → intent kategori boostları (manuel + dinamik pozitif kategoriler; yalnızca sıralamayı iyileştirir)
+      bool.must_not → yalnızca `legacy_hard_exclusions` (ör. watch→books; kontrollü, geriye dönük uyumlu sert dışlama)
+      Soft negatif kategoriler (`intent_signals.negative_categories`) ASLA
+      `must_not`'a girmez — yalnızca dış `boosting.negative` sarmalayıcısı
+      içinde skor düşürücü olarak kullanılır (bkz. `_soft_negative_boosting_negative_clause`);
+      bu nedenle tek başlarına hiçbir belgeyi elemezler.
 
     Böylece kategori boostları tek başına belge döndürmez; ürün önce lexical
     (veya çevrilmiş bir lexical alternatif) olarak eşleşmek zorundadır.
@@ -758,18 +690,18 @@ def build_search_query(
     # (bypass etmez — ek bir "veya" seçeneğidir).
     lexical_queries.extend(_build_translation_lexical_queries(query_text))
 
-    # Intent boost/dışlama sinyalleri. Çağıran taraf (search_products) zaten
+    # Intent sinyalleri. Çağıran taraf (search_products) zaten
     # resolve_intent_signals ile manuel+dinamik sinyalleri hesaplayıp enjekte
-    # ettiyse onlar kullanılır; aksi halde (varsayılan, saf çağrı) yalnızca
-    # manuel kurallar hesaplanır — lexical eşleşme zorunluluğunu değiştirmez.
+    # ettiyse o `IntentSignals` kullanılır; aksi halde (varsayılan, saf çağrı)
+    # yalnızca manuel kurallar hesaplanır — lexical eşleşme zorunluluğunu
+    # değiştirmez.
     if apply_intent_reranking:
-        if intent_boost_queries is None and intent_exclusions is None:
-            intent_boost_queries, intent_exclusions = _build_intent_signals(query_text)
-        else:
-            intent_boost_queries = intent_boost_queries or []
-            intent_exclusions = intent_exclusions or []
+        if intent_signals is None:
+            intent_signals = intent_service.resolve_intent_signals(
+                query_text, [], INTENT_RULES, [], config=cfg
+            )
     else:
-        intent_boost_queries, intent_exclusions = [], []
+        intent_signals = IntentSignals()
 
     bool_query = {
         "must": [
@@ -781,13 +713,28 @@ def build_search_query(
             }
         ],
     }
-    if intent_boost_queries:
-        bool_query["should"] = intent_boost_queries
-    if intent_exclusions:
-        bool_query["must_not"] = intent_exclusions
+    should_clauses = _positive_category_should_clauses(intent_signals.positive_categories)
+    if should_clauses:
+        bool_query["should"] = should_clauses
+    if intent_signals.legacy_hard_exclusions:
+        bool_query["must_not"] = list(intent_signals.legacy_hard_exclusions)
+
+    base_query = {"bool": bool_query}
+
+    negative_clause, negative_boost = _soft_negative_boosting_negative_clause(
+        intent_signals.negative_categories
+    )
+    if negative_clause is not None:
+        base_query = {
+            "boosting": {
+                "positive": base_query,
+                "negative": negative_clause,
+                "negative_boost": negative_boost,
+            }
+        }
 
     final_query = _apply_quality_ranking(
-        {"bool": bool_query}, query_text=query_text, enable_exact_asin=enable_exact_asin
+        base_query, query_text=query_text, enable_exact_asin=enable_exact_asin
     )
 
     payload = {
@@ -905,7 +852,7 @@ def search_products(
     normalized_page = _normalize_page(page)
     page_size = pagination.page_size if pagination.enabled else cfg.limits.result_size
 
-    intent_boost_queries, intent_exclusions = resolve_intent_signals(
+    intent_signals = resolve_intent_signals(
         query_text, include_dynamic=True, fetch_aggregations=fetch_aggregations, config=cfg
     )
     try:
@@ -918,8 +865,7 @@ def search_products(
             result_size=cfg.limits.result_size,
             page=normalized_page,
             track_total_hits=True,
-            intent_boost_queries=intent_boost_queries,
-            intent_exclusions=intent_exclusions,
+            intent_signals=intent_signals,
             config=cfg,
         )
     except PaginationLimitError as limit_error:

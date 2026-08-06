@@ -124,3 +124,75 @@ def test_detect_search_intent_watch():
 def test_detect_search_intent_none_for_unrelated_query():
     info = app.detect_search_intent("wireless headphones")
     assert info["intent"] is None
+
+
+def test_search_service_resolve_intent_signals_returns_intent_signals_object():
+    import services.search_service as search_service
+    from services.intent_service import IntentSignals
+
+    signals = search_service.resolve_intent_signals("smartwatch", include_dynamic=False)
+    assert isinstance(signals, IntentSignals)
+    assert "watch" in signals.matched_rule_ids
+    assert signals.legacy_hard_exclusions  # watch->books legacy exclusion still present
+
+
+def test_category_signal_alone_cannot_produce_a_hit():
+    payload = app.build_search_query(
+        "wireless mouse",
+        enable_phrase=False, enable_multi_match=False, enable_fuzzy=False, enable_exact_asin=False,
+    )
+    assert payload["query"] == {"match_none": {}}
+
+
+def test_object_negative_category_uses_boosting_not_must_not():
+    from services.intent_service import IntentSignals
+    import services.search_service as search_service
+
+    signals = IntentSignals(
+        negative_categories=({"value": "Cell Phones", "penalty": 0.5, "source": "manual"},),
+        matched_rule_ids=("iphone_case",),
+    )
+    payload = search_service.build_search_query("iphone case", intent_signals=signals)
+    query = payload["query"]
+    assert "boosting" in query
+    assert query["boosting"]["negative_boost"] >= search_service.CONFIG.intent_ranking.negative_penalty_floor
+    assert "must_not" not in query["boosting"]["positive"].get("bool", {})
+
+
+def test_legacy_hard_exclusion_still_uses_must_not():
+    from services.intent_service import IntentSignals
+    import services.search_service as search_service
+
+    signals = IntentSignals(
+        legacy_hard_exclusions=({"bool": {"should": [{"term": {"categories": "books"}}], "minimum_should_match": 1}},),
+        matched_rule_ids=("watch",),
+    )
+    payload = search_service.build_search_query("smartwatch", intent_signals=signals)
+    assert "boosting" not in payload["query"]
+    assert payload["query"]["bool"]["must_not"]
+
+
+def test_manual_positive_category_renders_categories_text_and_tr():
+    from services.intent_service import IntentSignals
+    import services.search_service as search_service
+
+    signals = IntentSignals(
+        positive_categories=({"value": "Cases", "boost": 3.0, "source": "manual", "field": "categories_text"},),
+        matched_rule_ids=("iphone_case",),
+    )
+    payload = search_service.build_search_query("iphone case", intent_signals=signals)
+    should = payload["query"]["bool"]["should"]
+    fields_hit = {list(c["match_phrase"].keys())[0] for c in should if "match_phrase" in c}
+    assert {"categories_text", "categories_text.tr"} <= fields_hit
+
+
+def test_dynamic_positive_category_renders_term_on_its_own_field():
+    from services.intent_service import IntentSignals
+    import services.search_service as search_service
+
+    signals = IntentSignals(
+        positive_categories=({"value": "Computers", "boost": 2.0, "source": "dynamic", "field": "main_category"},),
+    )
+    payload = search_service.build_search_query("laptop", intent_signals=signals)
+    should = payload["query"]["bool"]["should"]
+    assert any(c.get("term", {}).get("main_category", {}).get("value") == "Computers" for c in should)

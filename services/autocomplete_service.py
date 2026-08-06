@@ -82,11 +82,23 @@ def build_autocomplete_query(
 
     # Not: yalnızca manuel intent kuralları kullanılır — dinamik kategori
     # keşfi (Elasticsearch aggregation isteği) her tuş vuruşunda ekstra bir
-    # istek anlamına geleceğinden BİLEREK autocomplete'e dahil edilmez.
+    # istek anlamına geleceğinden BİLEREK autocomplete'e dahil edilmez (bkz.
+    # search_service.resolve_intent_signals(..., translated_queries=[],
+    # discovered_categories=[]) — manuel kurallar dışında hiçbir sinyal
+    # üretmez). Soft negatif kategoriler (`boosting` sarmalayıcısı gerektirir)
+    # autocomplete'in basit should/must_not şekline kasıtlı olarak dahil
+    # edilmez; yalnızca `legacy_hard_exclusions` (mevcut davranışla birebir
+    # aynı) must_not'a gider.
     intent_boost_queries = []
     intent_exclusions = []
     if apply_intent_reranking:
-        intent_boost_queries, intent_exclusions = search_service._build_intent_signals(query_text)
+        signals = search_service.intent_service.resolve_intent_signals(
+            query_text, [], search_service.INTENT_RULES, [], config=config
+        )
+        intent_boost_queries = search_service._positive_category_should_clauses(
+            signals.positive_categories
+        )
+        intent_exclusions = list(signals.legacy_hard_exclusions)
 
     return {
         "size": result_size,
