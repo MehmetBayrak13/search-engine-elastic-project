@@ -82,7 +82,10 @@ def test_intent_boosts_live_under_outer_should():
     payload = app.build_search_query("smartwatch")
     should = _innermost_query(payload["query"])["bool"].get("should", [])
     assert should, "watch intent sorgusu için should boostları bekleniyor"
-    for clause in should:
+    # Category boosts (from watch intent) are match_phrase, but store_boost is a match clause
+    category_clauses = [c for c in should if "match_phrase" in c]
+    assert category_clauses, "watch intent category boosts should be present as match_phrase"
+    for clause in category_clauses:
         assert "match_phrase" in clause
 
 
@@ -536,3 +539,53 @@ def test_relevance_contradiction_tier_names_absent_without_debug():
     payload = app.build_search_query("men perfume")
     raw = json.dumps(payload)
     assert "contradiction_tier:" not in raw
+
+
+def test_store_boost_clause_present_in_outer_should():
+    payload = app.build_search_query("sony")
+    should = _innermost_query(payload["query"])["bool"].get("should", [])
+    store_clauses = [c for c in should if "match" in c and "store" in c["match"]]
+    assert len(store_clauses) == 1
+    assert store_clauses[0]["match"]["store"]["boost"] == app.CONFIG.field_relevance.store_boost
+
+
+def test_store_boost_zero_omits_clause(tmp_path_factory):
+    import services.search_service as search_service
+    from config import load_search_config
+
+    data = _repo_search_config_dict()
+    data["field_relevance"]["store_boost"] = 0
+    override_path = _tmp_path_config(tmp_path_factory, data)
+    override_config = load_search_config(override_path)
+
+    payload = search_service.build_search_query("sony", config=override_config)
+    should = _innermost_query(payload["query"])["bool"].get("should", [])
+    assert not any("store" in c.get("match", {}) for c in should)
+    clear_config_cache()
+
+
+def test_store_boost_clause_lives_only_in_outer_should_not_in_function_score_filters():
+    # Note: using "men fragrance" instead of "men perfume store" to avoid "store" appearing
+    # in field evidence query text, while still triggering the men_perfume intent rule
+    # and its contradiction terms. The test verifies the store field match clause
+    # doesn't appear in function_score filters.
+    payload = app.build_search_query("men fragrance", include_relevance_debug=True)
+
+    def _collect_function_score_filters(node, acc):
+        if isinstance(node, dict):
+            if "function_score" in node:
+                fs = node["function_score"]
+                for fn in fs.get("functions", []):
+                    acc.append(fn.get("filter", {}))
+                _collect_function_score_filters(fs.get("query"), acc)
+            for key in ("bool", "boosting"):
+                if key in node and isinstance(node[key], dict):
+                    for sub_key in ("query", "positive"):
+                        if sub_key in node[key]:
+                            _collect_function_score_filters(node[key][sub_key], acc)
+        return acc
+
+    filters = _collect_function_score_filters(payload["query"], [])
+    assert filters, "test sanity: at least one function_score filter should exist for this query"
+    for filt in filters:
+        assert "store" not in json.dumps(filt)

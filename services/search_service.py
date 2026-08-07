@@ -605,6 +605,24 @@ def _positive_category_should_clauses(positive_categories: tuple[dict, ...]) -> 
     return clauses
 
 
+def _store_boost_clause(query_text: str, cfg: "AppConfig", *, debug_names: bool = False) -> dict | None:
+    """`store` (marka vekili) için düşük ağırlıklı, tek başına YETERSİZ
+    yardımcı sinyal (bkz. spec §3/§6). `store` `keyword` tipinde olduğu
+    için bu `match` yalnızca SORGU METNİNİN TAMAMI mağaza değerine eşit
+    olduğunda ateşler (ör. query="sony", store="Sony") — bilinçli olarak
+    dar bir sinyal. `field_relevance.enabled=False` veya
+    `store_boost<=0` iken tamamen atlanır; consensus/contradiction
+    sayımlarına ASLA dahil edilmez (bkz. _apply_field_consensus/
+    _apply_relevance_contradiction — ikisi de bu alana hiç değinmez)."""
+    fr = cfg.field_relevance
+    if not fr.enabled or fr.store_boost <= 0:
+        return None
+    field_params: dict = {"query": query_text, "boost": fr.store_boost}
+    if debug_names:
+        field_params["_name"] = "field:store"
+    return {"match": {"store": field_params}}
+
+
 def _soft_negative_boosting_negative_clause(negative_categories: tuple[dict, ...]) -> tuple[dict | None, float]:
     """Soft negatif kategori girdilerinden `boosting.negative` bloğunu ve
     tek skaler `negative_boost` değerini üretir (en güçlü — en düşük —
@@ -934,6 +952,9 @@ def build_search_query(
         ],
     }
     should_clauses = _positive_category_should_clauses(intent_signals.positive_categories)
+    store_clause = _store_boost_clause(query_text, cfg, debug_names=include_relevance_debug)
+    if store_clause is not None:
+        should_clauses.append(store_clause)
     if should_clauses:
         bool_query["should"] = should_clauses
     if intent_signals.legacy_hard_exclusions:
