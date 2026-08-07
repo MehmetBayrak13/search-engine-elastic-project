@@ -61,9 +61,18 @@ DEFAULT_QUERIES = [
     # review Finding 3 to surface manual_category_boost_cap's effect on the
     # watch rule's category_boost (12) / category_boost_tr (8) signal.
     "smartwatch",
+    # Field consensus/contradiction acceptance queries (bkz. spec §10/§12 —
+    # `men perfume` is the worked false-positive example: title matches but
+    # description/features/category should disagree once contradiction_terms
+    # fires; `face moisturizer`/`gaming mouse` are the corresponding
+    # should-rank-well counterparts).
+    "men perfume", "face moisturizer", "gaming mouse",
 ]
 
-REPORT_FIELDS = ["query", "variant", "rank", "title", "category", "score", "matched_rule", "discovered_category"]
+REPORT_FIELDS = [
+    "query", "variant", "rank", "title", "category", "score", "matched_rule", "discovered_category",
+    "matched_fields", "consensus_level", "contradictions", "applied_penalty",
+]
 
 
 def build_variant_configs() -> tuple[AppConfig, AppConfig]:
@@ -93,13 +102,44 @@ def build_variant_configs() -> tuple[AppConfig, AppConfig]:
     return before, after
 
 
+def build_field_relevance_variant_configs() -> tuple[AppConfig, AppConfig]:
+    """Bu YENİ özelliğin (field_relevance/field_consensus/relevance_contradiction)
+    KENDİ izole açık/kapalı temeli — `build_variant_configs()`ın (title_ranking/
+    intent_ranking) YERİNE değil, YANINA eklenir; ikisi ayrı, bağımsız
+    before/after çiftleridir. "field_before" = repodaki gerçek config,
+    yalnızca field_relevance/field_consensus/relevance_contradiction KAPALI
+    (title_ranking/intent_ranking AÇIK kalır — bu, bu üç yeni bayrağın
+    KENDİ artımlı etkisini izole eder). "field_after" = repodaki gerçek
+    config, değişmeden (üçü de açık). `build_variant_configs()`ın kendi
+    docstring'inde zaten belgelendiği gibi ("before" tam bir dal-öncesi
+    durum değil, yalnızca izole edilmiş bir bayrak karşılaştırmasıdır) bu
+    fonksiyon da aynı pragmatik yaklaşımı izler: "field_before" TAM bir
+    bu-özellik-öncesi tarihsel duruma denk gelmez (multi_match zaten
+    field_relevance ile değiştirildiği için "field_before" yalnızca
+    exact_asin/phrase/title_ranking-exact-prefix/fuzzy'e dayanır, eski
+    dis_max multi_match'e DEĞİL) — yine de bu üç bayrağın izole artımlı
+    etkisini doğru şekilde gösterir."""
+    after = load_search_config()
+    before = replace(
+        after,
+        field_relevance=replace(after.field_relevance, enabled=False),
+        field_consensus=replace(after.field_consensus, enabled=False),
+        relevance_contradiction=replace(after.relevance_contradiction, enabled=False),
+    )
+    return before, after
+
+
 def run_variant(query: str, variant_config: AppConfig, label: str) -> list[dict]:
     """Yalnızca `search_service.search_products` çağırır (read-only `_search`
-    isteği) — başka hiçbir Elasticsearch işlemi tetiklemez."""
-    result = search_service.search_products(query, config=variant_config)
+    isteği) — başka hiçbir Elasticsearch işlemi tetiklemez.
+    `include_relevance_debug=True` ES'e EK bir istek YAPTIRMAZ (bkz.
+    `relevance_debug_from_matched_queries` docstring'i) — yalnızca sorguya
+    `_name` ekler, aynı `_search` yanıtından `matched_queries` okunur."""
+    result = search_service.search_products(query, config=variant_config, include_relevance_debug=True)
     rows = []
     for rank, hit in enumerate(result.hits or [], start=1):
         source = hit.get("_source", {})
+        debug = search_service.relevance_debug_from_matched_queries(hit.get("matched_queries"), variant_config)
         rows.append({
             "query": query,
             "variant": label,
@@ -109,8 +149,40 @@ def run_variant(query: str, variant_config: AppConfig, label: str) -> list[dict]
             "score": hit.get("_score", 0),
             "matched_rule": None,
             "discovered_category": None,
+            "matched_fields": "|".join(debug["matched_fields"]),
+            "consensus_level": debug["consensus_level"],
+            "contradictions": "|".join(debug["contradictions"]),
+            "applied_penalty": debug["applied_penalty"],
         })
     return rows
+
+
+def summarize_rank_deltas(rows: list[dict], query: str, before_label: str, after_label: str) -> list[dict]:
+    """`query` için `before_label`/`after_label` varyantları arasında,
+    title bazında rank farkını hesaplar; en büyük düşüşten (kötüleşen rank)
+    en büyük yükselişe doğru sıralar — spec §10'un "All Beauty yanlış
+    eşleşmelerin neden düştüğünü göster" gereksinimi için. Bir title
+    `after_label` varyantında hiç görünmüyorsa (üst N sonuçtan tamamen
+    düştüyse) `after_rank`/`rank_delta` `None` döner ve bu, sıralamada
+    EN BÜYÜK düşüş olarak ele alınır (herhangi bir sonlu delta'dan daha
+    kötü kabul edilir)."""
+    before_ranks = {
+        row["title"]: row["rank"] for row in rows if row["query"] == query and row["variant"] == before_label
+    }
+    after_ranks = {
+        row["title"]: row["rank"] for row in rows if row["query"] == query and row["variant"] == after_label
+    }
+    deltas = []
+    for title, before_rank in before_ranks.items():
+        after_rank = after_ranks.get(title)
+        rank_delta = (after_rank - before_rank) if after_rank is not None else None
+        deltas.append({"title": title, "before_rank": before_rank, "after_rank": after_rank, "rank_delta": rank_delta})
+
+    def _effective_delta(entry: dict) -> int:
+        return entry["rank_delta"] if entry["rank_delta"] is not None else 10_000
+
+    deltas.sort(key=_effective_delta, reverse=True)
+    return deltas
 
 
 def write_report(rows: list[dict], output_path: Path, fmt: str) -> None:
@@ -136,14 +208,22 @@ def main() -> None:
 
     queries = args.queries if args.queries else DEFAULT_QUERIES
     before, after = build_variant_configs()
+    field_before, field_after = build_field_relevance_variant_configs()
 
     rows: list[dict] = []
     for query in queries:
         rows.extend(run_variant(query, before, "before"))
         rows.extend(run_variant(query, after, "after"))
+        rows.extend(run_variant(query, field_before, "field_before"))
+        rows.extend(run_variant(query, field_after, "field_after"))
 
     write_report(rows, Path(args.output), args.format)
     print(f"{len(rows)} satır yazıldı: {args.output}")
+
+    if "men perfume" in queries:
+        print("\n'men perfume' field_before -> field_after en büyük rank düşüşleri:")
+        for entry in summarize_rank_deltas(rows, "men perfume", "field_before", "field_after")[:10]:
+            print(f"  {entry['title']!r}: {entry['before_rank']} -> {entry['after_rank']} (delta={entry['rank_delta']})")
 
 
 if __name__ == "__main__":
