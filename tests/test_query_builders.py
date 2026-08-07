@@ -565,11 +565,12 @@ def test_store_boost_zero_omits_clause(tmp_path_factory):
 
 
 def test_store_boost_clause_lives_only_in_outer_should_not_in_function_score_filters():
-    # Note: using "men fragrance" instead of "men perfume store" to avoid "store" appearing
-    # in field evidence query text, while still triggering the men_perfume intent rule
-    # and its contradiction terms. The test verifies the store field match clause
-    # doesn't appear in function_score filters.
-    payload = app.build_search_query("men fragrance", include_relevance_debug=True)
+    """Verify store field match clause never appears inside function_score filters
+    (field_consensus or relevance_contradiction). Query "men perfume" triggers the
+    men_perfume rule with contradiction_terms, ensuring both wrapper types are
+    present. Uses structure-aware assertion (checking field keys) rather than
+    substring matching to avoid false positives from query text in field evidence."""
+    payload = app.build_search_query("men perfume", include_relevance_debug=True)
 
     def _collect_function_score_filters(node, acc):
         if isinstance(node, dict):
@@ -585,7 +586,22 @@ def test_store_boost_clause_lives_only_in_outer_should_not_in_function_score_fil
                             _collect_function_score_filters(node[key][sub_key], acc)
         return acc
 
+    def _has_store_field_clause(node):
+        """Recursively check if node contains a match clause on the 'store' field."""
+        if not isinstance(node, dict):
+            return False
+        if "match" in node and "store" in node["match"]:
+            return True
+        for value in node.values():
+            if isinstance(value, dict):
+                if _has_store_field_clause(value):
+                    return True
+            elif isinstance(value, list):
+                if any(_has_store_field_clause(v) if isinstance(v, dict) else False for v in value):
+                    return True
+        return False
+
     filters = _collect_function_score_filters(payload["query"], [])
     assert filters, "test sanity: at least one function_score filter should exist for this query"
     for filt in filters:
-        assert "store" not in json.dumps(filt)
+        assert not _has_store_field_clause(filt), f"store field should not appear in filters, but found in: {json.dumps(filt)[:200]}"
