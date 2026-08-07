@@ -605,3 +605,46 @@ def test_store_boost_clause_lives_only_in_outer_should_not_in_function_score_fil
     assert filters, "test sanity: at least one function_score filter should exist for this query"
     for filt in filters:
         assert not _has_store_field_clause(filt), f"store field should not appear in filters, but found in: {json.dumps(filt)[:200]}"
+
+
+def test_relevance_debug_from_matched_queries_counts_fields():
+    from services.search_service import relevance_debug_from_matched_queries
+
+    matched = ["field:title", "field:features", "field:cross_fields", "field:store"]
+    result = relevance_debug_from_matched_queries(matched, app.CONFIG)
+    assert set(result["matched_fields"]) == {"title", "features"}
+    assert result["consensus_level"] == 2
+    assert result["contradictions"] == []
+    assert result["applied_penalty"] == 1.0
+
+
+def test_relevance_debug_from_matched_queries_mild_tier_penalty():
+    from services.search_service import relevance_debug_from_matched_queries
+
+    matched = ["field:title", "contradiction:description", "contradiction:features", "contradiction_tier:mild"]
+    result = relevance_debug_from_matched_queries(matched, app.CONFIG)
+    assert set(result["contradictions"]) == {"description", "features"}
+    assert result["applied_penalty"] == app.CONFIG.relevance_contradiction.mild_penalty
+
+
+def test_relevance_debug_from_matched_queries_strong_tier_overrides_mild():
+    from services.search_service import relevance_debug_from_matched_queries
+
+    # ES evaluates both tier filters independently — when 3+ fields conflict,
+    # BOTH "contradiction_tier:mild" (>=2) and "contradiction_tier:strong" (>=3)
+    # match simultaneously (score_mode: min picks strong at query time; this
+    # helper must reproduce that same "strong wins" precedence when reading
+    # matched_queries back, since both names can legitimately co-occur).
+    matched = [
+        "contradiction:description", "contradiction:features", "contradiction:categories_text",
+        "contradiction_tier:mild", "contradiction_tier:strong",
+    ]
+    result = relevance_debug_from_matched_queries(matched, app.CONFIG)
+    assert result["applied_penalty"] == app.CONFIG.relevance_contradiction.strong_penalty
+
+
+def test_relevance_debug_from_matched_queries_empty_input():
+    from services.search_service import relevance_debug_from_matched_queries
+
+    result = relevance_debug_from_matched_queries([], app.CONFIG)
+    assert result == {"matched_fields": [], "consensus_level": 0, "contradictions": [], "applied_penalty": 1.0}

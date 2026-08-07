@@ -158,6 +158,7 @@ def search(
     enable_fuzzy: bool = Query(default=True),
     enable_exact_asin: bool = Query(default=True),
     debug_intent: bool = Query(default=False),
+    debug_relevance: bool = Query(default=False),
 ):
     config = _require_config()
     query_text = (q or "").strip()
@@ -175,6 +176,7 @@ def search(
         enable_exact_asin=enable_exact_asin,
         page=page,
         fetch_aggregations=_fetch_category_aggregations,
+        include_relevance_debug=debug_relevance,
     )
 
     if result.error:
@@ -216,6 +218,17 @@ def search(
             "dynamic_discovery": list(signals.debug.get("dynamic_discovery", [])),
             "lexical_required": True,
         }
+
+    if debug_relevance:
+        # `result.hits` her zaman ham ES hit sözlükleridir (bkz. SearchResult);
+        # `matched_queries` yalnızca include_relevance_debug=True iken (yukarıda)
+        # sorguya eklenen `_name`'ler sayesinde ES tarafından doldurulur — ekstra
+        # bir istek YOKTUR (bkz. relevance_debug_from_matched_queries docstring'i).
+        top_n = config.relevance_debug.explain_top_n
+        response_payload["relevance_debug"] = [
+            search_service.relevance_debug_from_matched_queries(hit.get("matched_queries"), config)
+            for hit in (result.hits or [])[:top_n]
+        ]
 
     return response_payload
 

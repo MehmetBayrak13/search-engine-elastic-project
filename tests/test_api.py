@@ -154,3 +154,88 @@ def test_autocomplete_elasticsearch_error_becomes_502(monkeypatch):
     _mock_post_search(monkeypatch, (None, "Elasticsearch bir hata döndürdü: 500"))
     response = client.get("/api/autocomplete", params={"q": "bluetooth speaker"})
     assert response.status_code == 502
+
+
+def test_debug_relevance_absent_by_default(monkeypatch):
+    _mock_post_search(
+        monkeypatch,
+        ({"hits": {"hits": [_hit()], "total": {"value": 1}}}, None),
+    )
+    response = client.get("/api/search", params={"q": "wireless mouse"})
+    assert response.status_code == 200
+    assert "relevance_debug" not in response.json()
+
+
+def test_debug_relevance_true_adds_bounded_relevance_debug(monkeypatch):
+    hit = _hit()
+    hit["matched_queries"] = ["field:title", "field:features"]
+    _mock_post_search(
+        monkeypatch,
+        ({"hits": {"hits": [hit], "total": {"value": 1}}}, None),
+    )
+    response = client.get("/api/search", params={"q": "wireless mouse", "debug_relevance": True})
+    assert response.status_code == 200
+    body = response.json()
+    assert "relevance_debug" in body
+    assert len(body["relevance_debug"]) == len(body["hits"]) == 1
+    entry = body["relevance_debug"][0]
+    assert set(entry.keys()) == {"matched_fields", "consensus_level", "contradictions", "applied_penalty"}
+    assert entry["matched_fields"] == ["title", "features"]
+    assert entry["consensus_level"] == 2
+    assert entry["contradictions"] == []
+    assert entry["applied_penalty"] == 1.0
+
+
+def test_debug_relevance_bounded_to_explain_top_n(monkeypatch):
+    hits = [_hit(asin=f"B{i:09d}", title=f"Item {i}") for i in range(25)]
+    for hit in hits:
+        hit["matched_queries"] = ["field:title"]
+    _mock_post_search(
+        monkeypatch,
+        ({"hits": {"hits": hits, "total": {"value": 25}}}, None),
+    )
+    response = client.get("/api/search", params={"q": "wireless mouse", "debug_relevance": True})
+    assert response.status_code == 200
+    body = response.json()
+    # config/search_config.json's relevance_debug.explain_top_n default is 20
+    assert len(body["relevance_debug"]) == 20
+    assert len(body["hits"]) == 25
+
+
+def test_debug_relevance_reports_contradiction_penalty(monkeypatch):
+    hit = _hit()
+    # A real ES response for 2 conflicting counted_fields also carries the
+    # "contradiction_tier:mild" _name (config's minimum_conflicting_fields is
+    # 2 — see _apply_relevance_contradiction), since that tier filter's
+    # minimum_should_match is satisfied by these same two field clauses.
+    # Simulating the field-level names without the tier name would not be a
+    # realistic ES response, and relevance_debug_from_matched_queries is
+    # deliberately designed to read the tier name rather than recompute the
+    # penalty from a field count (see its docstring).
+    hit["matched_queries"] = [
+        "field:title", "contradiction:description", "contradiction:features", "contradiction_tier:mild",
+    ]
+    _mock_post_search(
+        monkeypatch,
+        ({"hits": {"hits": [hit], "total": {"value": 1}}}, None),
+    )
+    response = client.get("/api/search", params={"q": "men perfume", "debug_relevance": True})
+    assert response.status_code == 200
+    entry = response.json()["relevance_debug"][0]
+    assert set(entry["contradictions"]) == {"description", "features"}
+    assert entry["applied_penalty"] < 1.0
+
+
+def test_debug_relevance_response_has_no_secret_shaped_strings(monkeypatch):
+    import re
+
+    hit = _hit()
+    hit["matched_queries"] = ["field:title"]
+    _mock_post_search(
+        monkeypatch,
+        ({"hits": {"hits": [hit], "total": {"value": 1}}}, None),
+    )
+    response = client.get("/api/search", params={"q": "wireless mouse", "debug_relevance": True})
+    body_text = response.text
+    assert not re.search(r"ELASTICSEARCH_(URL|API_KEY)", body_text)
+    assert "ApiKey " not in body_text

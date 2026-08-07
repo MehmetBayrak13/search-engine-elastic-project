@@ -55,6 +55,7 @@ __all__ = [
     "resolve_intent_signals",
     "build_search_query",
     "search_products",
+    "relevance_debug_from_matched_queries",
 ]
 
 # ---------------------------------------------------------------------------
@@ -757,6 +758,36 @@ def _apply_relevance_contradiction(
     }
 
 
+def relevance_debug_from_matched_queries(matched_queries: list[str] | None, cfg: "AppConfig") -> dict:
+    """ES'in native `_name`/`matched_queries` mekanizmasından (bkz.
+    build_search_query(include_relevance_debug=True), spec §8 — canlı
+    cluster'da doğrulandı: function_score `filter` içindeki `_name`'ler de
+    `hit['matched_queries']`'e yansıyor) türetilmiş SAF bir özetleme
+    fonksiyonu. Hiçbir alan burada YENİDEN TAHMİN edilmez — yalnızca
+    sorgunun kendisinin GERÇEKTEN eşleştirdiği adlandırılmış maddeler
+    okunur; `_explain` çağrısı YAPILMAZ (bkz. spec §11 performans notu —
+    bu fonksiyon ekstra bir ES isteği gerektirmez, aynı `_search`
+    yanıtından okunur)."""
+    matched = set(matched_queries or [])
+    matched_fields = [f for f in cfg.field_consensus.counted_fields if f"field:{f}" in matched]
+    contradictions = [f for f in cfg.relevance_contradiction.counted_fields if f"contradiction:{f}" in matched]
+
+    rc = cfg.relevance_contradiction
+    if "contradiction_tier:strong" in matched:
+        applied_penalty = rc.strong_penalty
+    elif "contradiction_tier:mild" in matched:
+        applied_penalty = rc.mild_penalty
+    else:
+        applied_penalty = 1.0
+
+    return {
+        "matched_fields": matched_fields,
+        "consensus_level": len(matched_fields),
+        "contradictions": contradictions,
+        "applied_penalty": applied_penalty,
+    }
+
+
 def build_search_query(
     query_text: str,
     enable_phrase: bool = True,
@@ -1070,6 +1101,7 @@ def search_products(
     *,
     fetch_aggregations=None,
     config: "AppConfig | None" = None,
+    include_relevance_debug: bool = False,
 ) -> SearchResult:
     """
     Seçili yöntemlerle üretilen gelişmiş sorguyu Elastic Cloud'a gönderir.
@@ -1116,6 +1148,7 @@ def search_products(
             track_total_hits=True,
             intent_signals=intent_signals,
             config=cfg,
+            include_relevance_debug=include_relevance_debug,
         )
     except PaginationLimitError as limit_error:
         message = CONFIG.ui.message(
