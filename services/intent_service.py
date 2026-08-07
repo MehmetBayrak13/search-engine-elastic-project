@@ -35,6 +35,7 @@ class IntentSignals:
     negative_categories: tuple[dict, ...] = ()
     matched_rule_ids: tuple[str, ...] = ()
     legacy_hard_exclusions: tuple[dict, ...] = ()
+    contradiction_terms: tuple[str, ...] = ()
     debug: dict = field(default_factory=dict)
 
 
@@ -154,6 +155,7 @@ def resolve_intent_signals(
     manual_positive: list[dict] = []
     soft_negative: list[dict] = []
     legacy_hard_exclusions: list[dict] = []
+    contradiction_terms_acc: list[str] = []
 
     for name, rule in manual_rules.items():
         match = _match_rule(rule, haystacks)
@@ -186,6 +188,9 @@ def resolve_intent_signals(
                 legacy_hard_exclusions.append(_legacy_hard_exclusion_clause(value))
             for entry in rule.soft_negative_categories:
                 soft_negative.append({"value": entry.value, "penalty": entry.penalty, "source": "manual"})
+            for term in rule.contradiction_terms:
+                if term not in contradiction_terms_acc:
+                    contradiction_terms_acc.append(term)
 
     manual_positive = _apply_cap(manual_positive, ranking.manual_category_boost_cap) if ranking.enabled else manual_positive
     soft_negative = (
@@ -217,5 +222,6 @@ def resolve_intent_signals(
         negative_categories=tuple(soft_negative),
         matched_rule_ids=tuple(matched_rule_ids),
         legacy_hard_exclusions=tuple(legacy_hard_exclusions),
+        contradiction_terms=tuple(contradiction_terms_acc),
         debug={"dynamic_discovery": list(discovered_categories), "translated_queries_used": list(translated_queries)},
     )

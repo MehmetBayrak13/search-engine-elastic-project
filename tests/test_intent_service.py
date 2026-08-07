@@ -23,6 +23,7 @@ def _rule(name, **overrides):
         excluded_terms=(),
         positive_categories=(),
         soft_negative_categories=(),
+        contradiction_terms=(),
     )
     base.update(overrides)
     return IntentRule(**base)
@@ -200,3 +201,41 @@ def test_category_alone_produces_no_lexical_signal():
     assert signals.positive_categories
     # No field named "must" or "lexical" exists anywhere on IntentSignals.
     assert not hasattr(signals, "must")
+
+
+def test_contradiction_terms_collected_from_matched_rule():
+    rules = {"men_perfume": _rule(
+        "men_perfume",
+        all_terms=("men", "perfume"),
+        contradiction_terms=("moisturizer", "face cream"),
+    )}
+    signals = resolve_intent_signals("men perfume", [], rules, [])
+    assert signals.contradiction_terms == ("moisturizer", "face cream")
+
+
+def test_contradiction_terms_empty_when_no_rule_matches():
+    rules = {"men_perfume": _rule(
+        "men_perfume", all_terms=("men", "perfume"), contradiction_terms=("moisturizer",),
+    )}
+    signals = resolve_intent_signals("running shoes", [], rules, [])
+    assert signals.contradiction_terms == ()
+
+
+def test_contradiction_terms_respect_exclusion_gate():
+    rules = {"watch": _rule(
+        "watch",
+        query_terms=("watch",),
+        excluded_when_query_contains=("book",),
+        contradiction_terms=("random conflict term",),
+    )}
+    signals = resolve_intent_signals("watch book", [], rules, [])
+    assert signals.contradiction_terms == ()
+
+
+def test_contradiction_terms_deduplicated_across_rules():
+    rules = {
+        "a": _rule("a", query_terms=("x",), contradiction_terms=("shared", "only_a")),
+        "b": _rule("b", query_terms=("x",), contradiction_terms=("shared", "only_b")),
+    }
+    signals = resolve_intent_signals("x", [], rules, [])
+    assert signals.contradiction_terms == ("shared", "only_a", "only_b")
