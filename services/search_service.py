@@ -682,6 +682,63 @@ def _apply_field_consensus(
     }
 
 
+def _contradiction_field_clause(field: str, terms: tuple[str, ...], *, debug_names: bool = False) -> dict:
+    """`terms`den herhangi birinin `field`de GERÇEKTEN `match_phrase` ile
+    eşleştiği bir OR grubu kurar — yine `exists` DEĞİL (bkz. spec §5
+    düzeltmesi); bir alan yalnızca kuralın kendi `contradiction_terms`inden
+    biri o alanda fiilen geçtiğinde 'çelişiyor' sayılır."""
+    should = [{"match_phrase": {field: term}} for term in terms]
+    clause: dict = {"bool": {"should": should, "minimum_should_match": 1}}
+    if debug_names:
+        clause["bool"]["_name"] = f"contradiction:{field}"
+    return clause
+
+
+def _apply_relevance_contradiction(
+    base_query: dict, contradiction_terms: tuple[str, ...], cfg: "AppConfig", *, debug_names: bool = False
+) -> dict:
+    """Bağımsız birden fazla alanda (title HARİÇ — bkz. spec §5) GERÇEKTEN
+    çelişen belgeler için kademeli PENALTY uygular; asla `must_not` üretmez,
+    yalnızca `boost_mode: multiply` ile skoru küçültür. `score_mode: min`
+    KRİTİKTİR — adaylar arasından EN GÜÇLÜ (en düşük) uygulanabilir
+    penaltının seçilmesini sağlar; `max` kullanılsaydı her zaman 1.0 (no-op)
+    seçilir ve özellik sessizce devre dışı kalırdı.
+
+    Her kademenin filtresi kendi adını taşır (`contradiction_tier:mild`/
+    `contradiction_tier:strong`, yalnızca `debug_names=True` iken) — bu,
+    hangi kademenin ateşlendiğini `matched_queries`den DOĞRUDAN okumayı
+    sağlar (bkz. Task 7); alan-sayısı eşiklerini İKİNCİ bir Python
+    fonksiyonunda YENİDEN KODLAMAYA gerek kalmaz — tek doğruluk kaynağı
+    burasıdır."""
+    rc = cfg.relevance_contradiction
+    if not rc.enabled or not contradiction_terms:
+        return base_query
+
+    per_field_clauses = [
+        _contradiction_field_clause(field, contradiction_terms, debug_names=debug_names)
+        for field in rc.counted_fields
+    ]
+    tiers = (
+        (rc.minimum_conflicting_fields, rc.mild_penalty, "contradiction_tier:mild"),
+        (rc.strong_conflicting_fields, rc.strong_penalty, "contradiction_tier:strong"),
+    )
+    functions = []
+    for minimum, weight, name in tiers:
+        filt: dict = {"bool": {"should": per_field_clauses, "minimum_should_match": minimum}}
+        if debug_names:
+            filt["bool"]["_name"] = name
+        functions.append({"filter": filt, "weight": weight})
+
+    return {
+        "function_score": {
+            "query": base_query,
+            "functions": functions,
+            "score_mode": "min",
+            "boost_mode": "multiply",
+        }
+    }
+
+
 def build_search_query(
     query_text: str,
     enable_phrase: bool = True,
@@ -886,6 +943,10 @@ def build_search_query(
 
     base_query = _apply_field_consensus(
         base_query, field_relevance_evidence, cfg, debug_names=include_relevance_debug
+    )
+
+    base_query = _apply_relevance_contradiction(
+        base_query, intent_signals.contradiction_terms, cfg, debug_names=include_relevance_debug
     )
 
     negative_clause, negative_boost = _soft_negative_boosting_negative_clause(

@@ -482,3 +482,57 @@ def test_field_consensus_disabled_removes_wrapper(tmp_path_factory):
     payload = search_service.build_search_query("kamera", config=override_config, include_relevance_debug=True)
     assert _find_function_score_by_name_prefix(payload["query"], "consensus:") is None
     clear_config_cache()
+
+
+def test_relevance_contradiction_wraps_query_when_rule_matches():
+    payload = app.build_search_query("men perfume", include_relevance_debug=True)
+    fs = _find_function_score_by_name_prefix(payload["query"], "contradiction")
+    # contradiction filters don't carry a top-level "consensus:"/"contradiction:" bool _name
+    # the way consensus does; assert via the per-field clause names instead.
+    raw = json.dumps(payload)
+    assert "contradiction:description" in raw
+    assert "contradiction:features" in raw
+    assert "contradiction:categories_text" in raw
+
+
+def test_relevance_contradiction_never_produces_must_not():
+    payload = app.build_search_query("men perfume")
+    # payload["query"] is always a function_score wrapper (Task 3's field_consensus
+    # wraps unconditionally when enabled) — peel back to the real bool node, same
+    # as every other structural assertion in this file (see _innermost_query).
+    # must_not, when present, is reserved for legacy_hard_exclusions only (watch/book) —
+    # this query has no watch/book signal, so must_not must be entirely absent.
+    assert "must_not" not in _innermost_query(payload["query"])["bool"]
+
+
+def test_relevance_contradiction_absent_without_contradiction_terms():
+    payload = app.build_search_query("wireless mouse", include_relevance_debug=True)
+    raw = json.dumps(payload)
+    assert "contradiction:" not in raw
+
+
+def test_relevance_contradiction_score_mode_is_min_not_max():
+    payload = app.build_search_query("men perfume", include_relevance_debug=True)
+    query = payload["query"]
+    # Walk to the contradiction function_score specifically (it wraps the consensus one).
+    fs = query["function_score"]  # consensus is innermost only if contradiction wraps it next
+    contradiction_fs = fs if any(
+        "contradiction:" in json.dumps(fn.get("filter", {})) for fn in fs.get("functions", [])
+    ) else None
+    if contradiction_fs is None:
+        contradiction_fs = query  # fallback shape check below will fail loudly if structure differs
+    assert contradiction_fs["score_mode"] == "min"
+    assert contradiction_fs["boost_mode"] == "multiply"
+
+
+def test_relevance_contradiction_tiers_are_named_for_debug():
+    payload = app.build_search_query("men perfume", include_relevance_debug=True)
+    raw = json.dumps(payload)
+    assert "contradiction_tier:mild" in raw
+    assert "contradiction_tier:strong" in raw
+
+
+def test_relevance_contradiction_tier_names_absent_without_debug():
+    payload = app.build_search_query("men perfume")
+    raw = json.dumps(payload)
+    assert "contradiction_tier:" not in raw
