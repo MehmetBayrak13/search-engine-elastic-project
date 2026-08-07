@@ -1,6 +1,6 @@
 :root {
   /* Brand palette */
-  --bg: #ffffff;
+  --bg: #f1ece1; /* RAL 9010 (Pure White) — not pure white */
   --surface: #ffffff;
   --primary: #2563eb;
   --primary-hover: #1d4ed8;
