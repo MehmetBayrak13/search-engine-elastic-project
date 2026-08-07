@@ -160,6 +160,31 @@ def test_field_relevance_disabled_by_enable_multi_match_toggle():
     assert with_count == without_count + len(app.CONFIG.field_relevance.fields) + 1
 
 
+def test_token_translation_only_query_does_not_crash_and_uses_field_relevance_fields():
+    """Regression test for a fix bundled with this task: `"kablosuz"` alone has
+    no phrase-level translation entry in config/query_translations.json (only
+    a token-level one, "kablosuz" -> "wireless"), so it exercises ONLY the
+    token-translation branch of `_build_translation_lexical_queries`, which
+    used to read the now-removed `CONFIG.search_methods.multi_match.es_fields`
+    and crash with AttributeError. It was fixed to read
+    `CONFIG.field_relevance.es_fields` instead, but had no covering test —
+    this locks that fix in so a future refactor of `field_relevance.es_fields`
+    can't silently reintroduce the crash with the suite still green."""
+    expansion = app.expand_multilingual_query("kablosuz")
+    assert expansion["phrase_translations"] == []
+    assert expansion["token_translations"] == ["wireless"]
+
+    payload = app.build_search_query("kablosuz", apply_intent_reranking=False)
+
+    should = payload["query"]["bool"]["must"][0]["bool"]["should"]
+    token_translation_clauses = [
+        c["multi_match"] for c in should
+        if c.get("multi_match", {}).get("query") == "wireless"
+    ]
+    assert len(token_translation_clauses) == 1
+    assert token_translation_clauses[0]["fields"] == app.CONFIG.field_relevance.es_fields
+
+
 def test_field_relevance_canonical_field_matches_share_one_canonical_key():
     from services.search_service import _build_field_evidence_clauses
 
