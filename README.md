@@ -143,8 +143,8 @@ Arama davranışının tamamı `config/` altındaki JSON dosyalarından okunur �
 
 | Dosya | İçerik |
 |---|---|
-| `config/search_config.json` | Index adları, timeout/limit değerleri, exact ASIN / phrase / multi-match / fuzzy / autocomplete alan ve boost ayarları, çeviri ayarları, **dinamik kategori keşfi (`dynamic_intent`) ayarları**, **sayfalama (`pagination`) ayarları**, **autocomplete dropdown görsel ayarları (`autocomplete_ui`: panel yüksekliği, satır yüksekliği, görsel gösterme)**, dönen kaynak alanlar, arayüz metinleri |
-| `config/intent_rules.json` | **Opsiyonel override katmanı** (örn. `watch`, `iphone_case`): alias/tetikleyici terimler (`query_terms`/`all_terms`/`any_terms`), dışlama koşulları (`excluded_when_query_contains`/`excluded_terms`), force-boost terimleri, obje-biçimli `positive_categories`/`negative_categories` (soft penalty), rozet metni/ikonu, `priority`. Boş `{}` da geçerlidir — hiç kural olmadan da çalışır; ana kategori-intent motoru bu dosya DEĞİL, dinamik kategori keşfidir (aşağıya bakın). Bkz. "Kategori + title intent ranking" bölümü. |
+| `config/search_config.json` | Index adları, timeout/limit değerleri, exact ASIN / phrase / fuzzy / autocomplete alan ve boost ayarları, **alan bazlı lexical eşleşme + consensus/contradiction ayarları (`field_relevance`, `field_consensus`, `relevance_contradiction`, `relevance_debug` — eski `multi_match` bölümünün YERİNE geçti, bkz. "Alan uzlaşısı ve çelişki tabanlı relevance" bölümü)**, çeviri ayarları, **dinamik kategori keşfi (`dynamic_intent`) ayarları**, **sayfalama (`pagination`) ayarları**, **autocomplete dropdown görsel ayarları (`autocomplete_ui`: panel yüksekliği, satır yüksekliği, görsel gösterme)**, dönen kaynak alanlar, arayüz metinleri |
+| `config/intent_rules.json` | **Opsiyonel override katmanı** (örn. `watch`, `iphone_case`, `men_perfume`): alias/tetikleyici terimler (`query_terms`/`all_terms`/`any_terms`), dışlama koşulları (`excluded_when_query_contains`/`excluded_terms`), force-boost terimleri, obje-biçimli `positive_categories`/`negative_categories` (soft penalty), kural bazlı `contradiction_terms` (bkz. "Alan uzlaşısı ve çelişki tabanlı relevance" bölümü), rozet metni/ikonu, `priority`. Boş `{}` da geçerlidir — hiç kural olmadan da çalışır; ana kategori-intent motoru bu dosya DEĞİL, dinamik kategori keşfidir (aşağıya bakın). Bkz. "Kategori + title intent ranking" bölümü. |
 | `config/query_translations.json` | Türkçe ifade/kelime → İngilizce karşılık sözlüğü. Boş `{}` da geçerlidir — çeviri sözlüğü olmadan uygulama, sorguyu değiştirmeden aramaya devam eder. |
 | `config/category_taxonomy.json` | `product_quality.py`nin kullandığı genel ürün-ailesi taksonomisi (12 aile: electronics, beauty, books, automotive, home&kitchen, clothing, toys, pet, grocery, sports, tools, office) — title/category terimleri, aliaslar, `conflicting_families`. |
 | `config/quality_config.json` | `product_quality.py` skorlama ağırlıkları/eşikleri, stopword listesi, flag isimleri. |
@@ -360,6 +360,96 @@ mevcuttu.
 
 Bu bölümdeki hiçbir değişiklik için Elasticsearch mapping/reindex
 gerekmedi.
+
+## Alan uzlaşısı ve çelişki tabanlı relevance (field consensus / contradiction)
+
+Eski `search_methods.multi_match` (tek bir `dis_max` tipi `multi_match`
+maddesi) **tamamen kaldırıldı** ve yerine iki parçalı, additif bir yapı
+geldi: `config/search_config.json:field_relevance` +
+`config/search_config.json:field_consensus`. Amaç yalnızca alan/boost
+listesini taşımak değil, sorgunun KAÇ FARKLI alanda BAĞIMSIZ olarak
+gerçekten eşleştiğini ölçüp bunu ayrı bir sinyal haline getirmekti — eski
+`dis_max` yapısı yalnızca EN İYİ tek alan eşleşmesini puanladığından bu
+bilgiyi taşıyamıyordu.
+
+- **`field_relevance`** (`services/search_service.py:_build_field_evidence_clauses`) —
+  `fields`teki her alan (`title`/`title.tr`, `features`/`features.tr`,
+  `description`/`description.tr`, `categories_text`/`categories_text.tr`)
+  için TEK bir `match` maddesi üretir ve bunları `bool.must` içindeki
+  zorunlu lexical `bool.should` grubuna EK seçenekler olarak ekler —
+  `dis_max` yerine ADDİTİF puanlanır (`bool.should` toplamı). Aynı zamanda,
+  sorgu terimleri farklı alanlara dağılmış olsa bile (ör. `"wireless gaming
+  mouse"` → title="Gaming Mouse" + features="Wireless") zorunlu lexical
+  kapıyı karşılayabilmesi için TEK bir `cross_fields` `multi_match`
+  (`cross_fields_boost`, `operator: field_relevance.operator`) fallback
+  olarak eklenir. Ayrıca düşük ağırlıklı, tek başına YETERSİZ bir
+  `store_boost` yardımcı maddesi vardır (`store` alanı marka vekili — yalnızca
+  sorgu metninin TAMAMI mağaza değerine eşitse ateşler); bu madde
+  consensus/contradiction sayımlarına ASLA dahil edilmez. Hem alan-kanıtı
+  maddeleri hem `cross_fields` fallback'i hem de `store_boost` maddesi
+  `enable_multi_match` sidebar switch'iyle birlikte kapanır/açılır.
+- **`field_consensus`** (`services/search_service.py:_apply_field_consensus`) —
+  `field_relevance`in ürettiği GERÇEK `match` kanıtlarını (yeniden
+  türetmeden, aynı nesneleri) yeniden kullanarak, sorgunun BAĞIMSIZ olarak
+  kaç kanonik alanda (`counted_fields`: `title`, `features`, `description`,
+  `categories_text` — `title`/`title.tr` TEK alan sayılır) eşleştiğine göre
+  kademeli bir çarpan uygular: 2+ alan → `two_field_boost` (1.15), 3+ alan →
+  `three_field_boost` (1.3), 4+ alan → `four_plus_field_boost` (1.45).
+  `function_score` içinde `score_mode: max` (kademeler ÇARPILMAZ, yalnızca
+  en yüksek uygulanabilir kademe kullanılır) + `boost_mode: multiply`
+  kullanılır. **Kanıt asla `exists` ile SAYILMAZ** — bir alanın yalnızca
+  VAR OLMASI (populated-but-irrelevant) hiçbir zaman bonus kazandırmaz;
+  yalnızca o alanda GERÇEK bir `match` eşleşmesi sayılır. Kanıt havuzu
+  tamamen boşsa (`enable_multi_match=False` veya `field_relevance.enabled=
+  False`) sarmalayıcı TAMAMEN atlanır — aksi halde Elasticsearch'in boş
+  `bool.should`u `minimum_should_match` uygulanmadan ÖNCE `match_all`e
+  çevirmesi yüzünden HİÇBİR kanıtı olmayan belgeler bile en üst kademe
+  bonusunu alırdı (final review'da düzeltilen bir hata — bkz. Git geçmişi).
+- **`relevance_contradiction`** (`services/search_service.py:_apply_relevance_contradiction`) —
+  `config/intent_rules.json`daki kural bazlı `contradiction_terms` alanını
+  kullanır (ör. `men_perfume` kuralı `["women", "her", "she"]` gibi terimler
+  taşıyabilir): bu terimlerden biri `counted_fields`teki (`description`,
+  `features`, `categories_text` — **`title` BİLİNÇLİ olarak HARİÇ**, title
+  zaten yanlış-pozitif riskinin en yüksek olduğu alan) bir alanda GERÇEKTEN
+  `match_phrase` ile eşleşirse o alan "çelişiyor" sayılır. `minimum_conflicting_
+  fields` (2) veya daha fazla alan çelişirse `mild_penalty` (0.65),
+  `strong_conflicting_fields` (3) veya daha fazlası çelişirse `strong_penalty`
+  (0.3) çarpanı uygulanır — `score_mode: min` KRİTİKTİR (en güçlü/en düşük
+  uygulanabilir penaltıyı seçer; `max` kullanılsaydı özellik sessizce no-op
+  olurdu). **Hiçbir zaman sonuç ELEMEZ**: `must_not` üretilmez, yalnızca
+  `boost_mode: multiply` ile skoru küçültür — bir belge çelişse bile arama
+  sonuçlarından tamamen kaybolmaz, yalnızca aşağı sıralanır (`minimum_penalty`
+  ile bir taban vardır, penaltı sıfıra inip belgeyi fiilen gizleyemez).
+- **Üç bağımsız `enabled` bayrağı ve rollback güvenliği** — `field_relevance`,
+  `field_consensus`, `relevance_contradiction` birbirinden BAĞIMSIZ üç
+  `enabled` alanı taşır, ama davranışları AYNI DEĞİLDİR:
+  - `field_consensus.enabled=false` ve `relevance_contradiction.enabled=false`
+    GERÇEK, temiz bir rollback'tir — yalnızca ilgili `function_score`
+    sarmalayıcısını (bonus/penalty çarpanını) kaldırır, geri kalan her şey
+    (lexical eşleşme, boost'lar) aynen çalışmaya devam eder.
+  - **`field_relevance.enabled=false` AYNI ANLAMDA bir rollback DEĞİLDİR.**
+    Eski `multi_match` kod yolu bir flag'in ARKASINDA TUTULMADI — TAMAMEN
+    KALDIRILDI. Bu yüzden `field_relevance.enabled=false` yapmak
+    title/features/description/categories_text üzerindeki TÜM çok-alanlı
+    lexical eşleşmeyi (alan-kanıtı maddeleri + `cross_fields` fallback +
+    `store_boost`) devre dışı bırakır; geriye yalnızca exact-ASIN/phrase/
+    fuzzy ve `title_ranking`in exact+prefix katmanları kalır. Bir operatör
+    bu bayrağı "eski multi_match davranışına dön" niyetiyle kapatırsa arama
+    kalitesi beklenenden çok daha fazla düşer — bu davranış BİLEREK
+    belgelenmiştir, gelecekte bu üç bayrağın aynı şekilde davrandığı
+    varsayılmamalıdır.
+- **`GET /api/search?debug_relevance=true`** — bu üç sistemin (`field_relevance`/
+  `field_consensus`/`relevance_contradiction`) hangi alanlarda gerçekten
+  eşleştiğini/çeliştiğini ve hangi penaltının uygulandığını her hit için
+  gösteren opsiyonel debug parametresi; ayrıntılı response şeması için
+  yukarıdaki "Kategori + title intent ranking" bölümündeki
+  `GET /api/search?debug_relevance=true` alt başlığına bakın (burada
+  tekrar edilmemiştir).
+
+Bu bölümdeki hiçbir değişiklik için Elasticsearch mapping/reindex gerekmedi
+— `field_relevance.fields`teki tüm alanlar (title/features/description/
+categories_text + `.tr` varyantları, `store`) zaten canlı index mapping'inde
+mevcuttu.
 
 ## Sayfalama (Pagination)
 
