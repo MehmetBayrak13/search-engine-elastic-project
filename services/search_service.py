@@ -612,8 +612,12 @@ def _store_boost_clause(query_text: str, cfg: "AppConfig", *, debug_names: bool 
     için bu `match` yalnızca SORGU METNİNİN TAMAMI mağaza değerine eşit
     olduğunda ateşler (ör. query="sony", store="Sony") — bilinçli olarak
     dar bir sinyal. `field_relevance.enabled=False` veya
-    `store_boost<=0` iken tamamen atlanır; consensus/contradiction
-    sayımlarına ASLA dahil edilmez (bkz. _apply_field_consensus/
+    `store_boost<=0` iken tamamen atlanır; çağıran taraf (`build_search_query`)
+    ayrıca bu fonksiyonu yalnızca `enable_multi_match=True` iken çağırır —
+    `field_relevance`'tan türetilen diğer her madde (alan-kanıtı eşleşmeleri,
+    `cross_fields` fallback) aynı toggle'a bağlı olduğundan bu tutarlılığı
+    korur (final review bulgusu 6). Consensus/contradiction sayımlarına
+    ASLA dahil edilmez (bkz. _apply_field_consensus/
     _apply_relevance_contradiction — ikisi de bu alana hiç değinmez)."""
     fr = cfg.field_relevance
     if not fr.enabled or fr.store_boost <= 0:
@@ -675,7 +679,15 @@ def _apply_field_consensus(
     (`boost_mode: multiply` × hiçbir şey = ×1) — `_build_quality_functions`
     ile aynı filter+weight kuralı, `script_score` YOK."""
     fc = cfg.field_consensus
-    if not fc.enabled:
+    if not fc.enabled or not evidence_by_field:
+        # evidence_by_field boş ise (enable_multi_match=False veya
+        # field_relevance.enabled=False) sarmalayici tamamen atlanir --
+        # aksi halde _consensus_tier_filter her kademe icin BOS bir
+        # `should` listesiyle bir filtre uretirdi; Elasticsearch bos
+        # bool.should'u minimum_should_match uygulanmadan ONCE match_all'a
+        # cevirir, yani kanit sifir olsa bile HER belge en ust kademe
+        # (four_plus) bonusunu alirdi -- "kanitsiz belge asla bonus almaz"
+        # degismezinin dogrudan ihlali (final review bulgusu 1).
         return base_query
     tiers = (
         (2, fc.two_field_boost, "consensus:two_plus"),
@@ -983,9 +995,15 @@ def build_search_query(
         ],
     }
     should_clauses = _positive_category_should_clauses(intent_signals.positive_categories)
-    store_clause = _store_boost_clause(query_text, cfg, debug_names=include_relevance_debug)
-    if store_clause is not None:
-        should_clauses.append(store_clause)
+    # `field_relevance`'tan turetilen diger her madde (alan-kaniti eslesmeleri,
+    # cross_fields fallback) enable_multi_match ile kapatiliyor -- store-boost
+    # yardimci maddesi de aynı sekilde bu toggle'a bagli olmalidir, aksi halde
+    # "Cok alanli arama" kapatildiginda tutarsiz bicimde acik kalirdi (final
+    # review bulgusu 6).
+    if enable_multi_match:
+        store_clause = _store_boost_clause(query_text, cfg, debug_names=include_relevance_debug)
+        if store_clause is not None:
+            should_clauses.append(store_clause)
     if should_clauses:
         bool_query["should"] = should_clauses
     if intent_signals.legacy_hard_exclusions:

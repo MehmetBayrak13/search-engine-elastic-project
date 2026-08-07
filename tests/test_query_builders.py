@@ -466,11 +466,20 @@ def test_field_consensus_filters_never_use_exists():
 
 
 def test_field_consensus_tier_weights_come_from_config():
+    """Asserts the actual (minimum_should_match, weight) PAIRING, not just the
+    set of weight values — a set-membership check would still pass if
+    two_field_boost and four_plus_field_boost were accidentally swapped."""
     payload = app.build_search_query("kamera", include_relevance_debug=True)
     fs = _find_function_score_by_name_prefix(payload["query"], "consensus:")
-    weights = sorted(fn["weight"] for fn in fs["functions"])
+    pairs = sorted(
+        (fn["filter"]["bool"]["minimum_should_match"], fn["weight"]) for fn in fs["functions"]
+    )
     fc = app.CONFIG.field_consensus
-    assert weights == sorted([fc.two_field_boost, fc.three_field_boost, fc.four_plus_field_boost])
+    assert pairs == [
+        (2, fc.two_field_boost),
+        (3, fc.three_field_boost),
+        (4, fc.four_plus_field_boost),
+    ]
 
 
 def test_field_consensus_disabled_removes_wrapper(tmp_path_factory):
@@ -487,15 +496,38 @@ def test_field_consensus_disabled_removes_wrapper(tmp_path_factory):
     clear_config_cache()
 
 
+def test_field_consensus_no_evidence_grants_no_unearned_bonus():
+    """When there is no field-relevance evidence at all (enable_multi_match=False,
+    so field_relevance_evidence == {}), _consensus_tier_filter would otherwise build
+    tier filters with an EMPTY `should` list — Elasticsearch rewrites an empty
+    bool.should to match_all BEFORE applying minimum_should_match, so every document
+    (regardless of any real match) would earn the top consensus bonus. The wrapper
+    must be skipped entirely in this case: no "consensus:" name should appear
+    anywhere in the built payload."""
+    payload = app.build_search_query(
+        "kamera", enable_multi_match=False, include_relevance_debug=True
+    )
+    raw = json.dumps(payload)
+    assert "consensus:" not in raw
+
+
 def test_relevance_contradiction_wraps_query_when_rule_matches():
     payload = app.build_search_query("men perfume", include_relevance_debug=True)
     fs = _find_function_score_by_name_prefix(payload["query"], "contradiction")
+    assert fs is not None
     # contradiction filters don't carry a top-level "consensus:"/"contradiction:" bool _name
     # the way consensus does; assert via the per-field clause names instead.
     raw = json.dumps(payload)
     assert "contradiction:description" in raw
     assert "contradiction:features" in raw
     assert "contradiction:categories_text" in raw
+
+
+def test_relevance_contradiction_filters_never_use_exists():
+    payload = app.build_search_query("men perfume", include_relevance_debug=True)
+    fs = _find_function_score_by_name_prefix(payload["query"], "contradiction")
+    assert fs is not None
+    assert "exists" not in json.dumps(fs)
 
 
 def test_relevance_contradiction_never_produces_must_not():
@@ -515,17 +547,16 @@ def test_relevance_contradiction_absent_without_contradiction_terms():
 
 
 def test_relevance_contradiction_score_mode_is_min_not_max():
+    """Locates the contradiction function_score via the name-prefix helper rather
+    than assuming it's the outermost node in payload["query"] — that assumption
+    only holds because quality_ranking.enabled=false in the current repo config;
+    if quality_ranking were ever enabled, an outermost-node assumption would break
+    with a confusing KeyError instead of a clear assertion failure."""
     payload = app.build_search_query("men perfume", include_relevance_debug=True)
-    query = payload["query"]
-    # Walk to the contradiction function_score specifically (it wraps the consensus one).
-    fs = query["function_score"]  # consensus is innermost only if contradiction wraps it next
-    contradiction_fs = fs if any(
-        "contradiction:" in json.dumps(fn.get("filter", {})) for fn in fs.get("functions", [])
-    ) else None
-    if contradiction_fs is None:
-        contradiction_fs = query  # fallback shape check below will fail loudly if structure differs
-    assert contradiction_fs["score_mode"] == "min"
-    assert contradiction_fs["boost_mode"] == "multiply"
+    fs = _find_function_score_by_name_prefix(payload["query"], "contradiction_tier:")
+    assert fs is not None
+    assert fs["score_mode"] == "min"
+    assert fs["boost_mode"] == "multiply"
 
 
 def test_relevance_contradiction_tiers_are_named_for_debug():
@@ -562,6 +593,16 @@ def test_store_boost_zero_omits_clause(tmp_path_factory):
     should = _innermost_query(payload["query"])["bool"].get("should", [])
     assert not any("store" in c.get("match", {}) for c in should)
     clear_config_cache()
+
+
+def test_store_boost_clause_omitted_when_multi_match_disabled():
+    """`_store_boost_clause` must be gated by `enable_multi_match` the same way
+    every other field_relevance-derived clause (per-field evidence, cross_fields
+    fallback) already is — turning off "Cok alanli arama" should also turn off
+    the store-boost helper clause, for consistency (final review bulgusu 6)."""
+    payload = app.build_search_query("sony", enable_multi_match=False)
+    should = _innermost_query(payload["query"])["bool"].get("should", [])
+    assert not any("store" in c.get("match", {}) for c in should)
 
 
 def test_store_boost_clause_lives_only_in_outer_should_not_in_function_score_filters():
