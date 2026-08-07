@@ -307,6 +307,35 @@ mevcuttu.
   `must_not` madde sözlükleri) bu yanıttan BİLEREK dışarıda bırakılır (bkz.
   `api/main.py`, `services/intent_service.py` modül docstring'i).
 
+- **`GET /api/search?debug_relevance=true`** — varsayılanı `false`,
+  geliştirme/debug amaçlı opsiyonel bir parametredir. `true` iken yanıta bir
+  `relevance_debug` anahtarı eklenir — `hits`teki her sonuçla İNDEKSE GÖRE
+  hizalı, `config/search_config.json:relevance_debug.explain_top_n`e (şu an
+  20) kadar kırpılmış bir liste (daha fazla hit dönse bile yalnızca ilk
+  `explain_top_n` tanesi için hesaplanır):
+  ```json
+  [
+    {
+      "matched_fields": ["title", "features"],
+      "consensus_level": 2,
+      "contradictions": [],
+      "applied_penalty": 1.0
+    }
+  ]
+  ```
+  Bu, Elasticsearch'in native `_name`/`matched_queries` mekanizmasına
+  dayanır: `include_relevance_debug=True` iken `build_search_query`,
+  `field_consensus`/`relevance_contradiction`/`field_relevance` maddelerine
+  (`field:title`, `contradiction:description`,
+  `contradiction_tier:mild`/`contradiction_tier:strong` gibi) `_name`
+  ekler; ES bu adları eşleşen her hit'in `matched_queries` alanına
+  yansıtır. `relevance_debug_from_matched_queries`
+  (`services/search_service.py`) bu adları SAF biçimde okuyup özetler —
+  ne ekstra bir Elasticsearch isteği ne de bir `_explain` çağrısı yapılır
+  (`debug_intent` gibi, mevcut `_search` yanıtından okunur). Aynı
+  `debug_intent` güvencesi geçerlidir: yanıt JSON-safe'dir, sır içermez ve
+  ham Elasticsearch query DSL'i asla döndürmez.
+
 - **`tools/evaluate_intent_ranking.py`** — `evaluate_quality_sample.py` ile
   aynı env değişkenlerini (`ELASTICSEARCH_URL`, `ELASTICSEARCH_API_KEY`)
   kullanan, read-only, offline bir before/after değerlendirme scriptidir.
