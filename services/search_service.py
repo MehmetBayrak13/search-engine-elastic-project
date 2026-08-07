@@ -198,7 +198,10 @@ def _build_translation_lexical_queries(query_text: str) -> list[dict]:
                 "query": " ".join(expansion["token_translations"]),
                 "type": "best_fields",
                 "boost": CONFIG.translation.token_boost,
-                "fields": CONFIG.search_methods.multi_match.es_fields,
+                # `search_methods.multi_match` kaldırıldı (bkz. Task 1) — alan
+                # listesi artık aynı amaca hizmet eden `field_relevance`'tan
+                # gelir (title/features/description/categories_text + .tr).
+                "fields": CONFIG.field_relevance.es_fields,
             }
         })
 
@@ -504,6 +507,67 @@ def _normalize_page(page: int) -> int:
     return page if page >= 1 else 1
 
 
+def _canonical_field_name(field: str) -> str:
+    """`.tr` sonekini çıkarır (`title.tr` -> `title`) — dil çiftini TEK bir
+    kanonik alan olarak ele almak için (bkz. spec §4: title/title.tr aynı
+    consensus/contradiction alanı olarak sayılmalı, iki ayrı alan değil)."""
+    return field[: -len(".tr")] if field.endswith(".tr") else field
+
+
+def _build_field_evidence_clauses(
+    query_text: str, cfg: "AppConfig", *, name_prefix: str | None = None
+) -> dict[str, list[dict]]:
+    """`field_relevance.fields`teki her alan için TEK bir `match`
+    (operator: field_relevance.operator) maddesi üretir; sonucu KANONİK
+    alan adına göre gruplar. Bu sözlük hem lexical `bool.should` grubunda
+    (bu fonksiyonun çağrıldığı yer) HEM DE field consensus'un (Task 3)
+    filter'larında AYNEN yeniden kullanılır — consensus asla `exists` ile
+    değil, burada üretilen GERÇEK `match` kanıtıyla sayılır (bkz. spec §4
+    düzeltmesi).
+
+    `name_prefix` yalnızca `include_relevance_debug=True` iken verilir;
+    her maddeye `_name: f"{name_prefix}:{canonical_field}"` eklenir — ES'in
+    native `matched_queries` mekanizması hangi kanonik alanın GERÇEKTEN
+    eşleştiğini debug response'una taşır (bkz. spec §8, canlı cluster'da
+    doğrulandı)."""
+    grouped: dict[str, list[dict]] = {}
+    for entry in cfg.field_relevance.fields:
+        canonical = _canonical_field_name(entry.field)
+        field_params: dict = {
+            "query": query_text,
+            "operator": cfg.field_relevance.operator,
+            "boost": entry.boost,
+        }
+        if name_prefix:
+            field_params["_name"] = f"{name_prefix}:{canonical}"
+        grouped.setdefault(canonical, []).append({"match": {entry.field: field_params}})
+    return grouped
+
+
+def _build_cross_fields_clause(
+    query_text: str, cfg: "AppConfig", *, include_relevance_debug: bool = False
+) -> dict:
+    """`field_relevance.fields`in tamamını TEK bir alanmış gibi ele alan
+    `cross_fields` `multi_match` — sorgu terimleri farklı alanlara
+    dağılmış olsa bile (`"wireless gaming mouse"` -> title="Gaming Mouse"
+    + features="Wireless") zorunlu lexical kapıyı hâlâ karşılayabilir
+    (bkz. spec §3, istek §5 "cross-field query"). `operator: and` olduğu
+    için gevşek bag-of-words eşleşmesi DEĞİLDİR — tüm terimler hâlâ
+    ZORUNLUDUR, yalnızca tek bir alanda olmak zorunda değildir."""
+    clause: dict = {
+        "multi_match": {
+            "query": query_text,
+            "type": "cross_fields",
+            "operator": cfg.field_relevance.operator,
+            "boost": cfg.field_relevance.cross_fields_boost,
+            "fields": cfg.field_relevance.es_fields,
+        }
+    }
+    if include_relevance_debug:
+        clause["multi_match"]["_name"] = "field:cross_fields"
+    return clause
+
+
 _POSITIVE_CATEGORY_TEXT_FIELDS = ("categories_text", "categories_text.tr")
 
 
@@ -575,6 +639,7 @@ def build_search_query(
     intent_signals: "IntentSignals | None" = None,
     *,
     config: "AppConfig | None" = None,
+    include_relevance_debug: bool = False,
 ) -> dict:
     """
     Seçili yöntemlere göre intent-farkındalıklı bir Elasticsearch sorgusu üretir.
@@ -661,17 +726,21 @@ def build_search_query(
             }
         })
 
-    # C. Normal full-text multi_match
-    if enable_multi_match:
-        lexical_queries.append({
-            "multi_match": {
-                "query": query_text,
-                "type": methods.multi_match.type,
-                "operator": methods.multi_match.operator,
-                "boost": methods.multi_match.boost,
-                "fields": methods.multi_match.es_fields,
-            }
-        })
+    # C. Field relevance — sorgu kanıtını title/features/description/
+    # categories_text arasında BAĞIMSIZ olarak toplar (eski dis_max
+    # multi_match'in YERİNE geçer — additif puanlama field consensus'u
+    # (bkz. build_search_query çağrısındaki §D-consensus wrapper) mümkün
+    # kılar). `field_relevance_evidence` Task 3/5'te consensus/contradiction
+    # filter'larında yeniden kullanılmak üzere fonksiyon gövdesinde saklanır.
+    field_relevance_evidence: dict[str, list[dict]] = {}
+    if enable_multi_match and cfg.field_relevance.enabled:
+        name_prefix = "field" if include_relevance_debug else None
+        field_relevance_evidence = _build_field_evidence_clauses(query_text, cfg, name_prefix=name_prefix)
+        for clauses in field_relevance_evidence.values():
+            lexical_queries.extend(clauses)
+        lexical_queries.append(
+            _build_cross_fields_clause(query_text, cfg, include_relevance_debug=include_relevance_debug)
+        )
 
     # D. Fuzzy multi_match (yazım hataları)
     if enable_fuzzy:

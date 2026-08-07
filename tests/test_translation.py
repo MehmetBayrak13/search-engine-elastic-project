@@ -66,9 +66,11 @@ def test_translation_adds_lexical_alternative_without_bypassing_gate():
 def test_english_query_without_translation_match_is_unaffected():
     with_translation = app.build_search_query("wireless headphones", apply_intent_reranking=False)
     lexical = with_translation["query"]["bool"]["must"][0]["bool"]["should"]
-    # Çeviri sözlüğünde eşleşme yok; 4 standart lexical yöntem + title_ranking'in
-    # bağımsız 2 katmanı (exact + prefix) olmalı, çeviri alternatifi olmamalı.
-    assert len(lexical) == 6
+    # Çeviri sözlüğünde eşleşme yok; asin(1) + phrase(1) + field_relevance
+    # (8 alan + 1 cross_fields = 9, eski tekli multi_match'in YERİNE geçti)
+    # + fuzzy(1) + title_ranking'in bağımsız 2 katmanı (exact + prefix) = 14,
+    # çeviri alternatifi olmamalı.
+    assert len(lexical) == 1 + 1 + len(app.CONFIG.field_relevance.fields) + 1 + 1 + 2
 
 
 def test_autocomplete_translation_only_adds_full_phrase_alternatives():

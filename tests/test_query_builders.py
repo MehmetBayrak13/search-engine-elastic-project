@@ -101,7 +101,7 @@ def test_fuzzy_switch_can_be_disabled():
     assert without_count == with_count - 1
 
 
-def test_multi_match_uses_configured_fields_and_boost():
+def test_field_relevance_produces_one_match_clause_per_configured_field():
     payload = app.build_search_query(
         "kamera",
         enable_phrase=False,
@@ -109,10 +109,76 @@ def test_multi_match_uses_configured_fields_and_boost():
         enable_exact_asin=False,
         apply_intent_reranking=False,
     )
-    clause = payload["query"]["bool"]["must"][0]["bool"]["should"][0]["multi_match"]
-    assert clause["fields"] == app.CONFIG.search_methods.multi_match.es_fields
-    assert clause["boost"] == app.CONFIG.search_methods.multi_match.boost
-    assert clause["operator"] == app.CONFIG.search_methods.multi_match.operator
+    should = payload["query"]["bool"]["must"][0]["bool"]["should"]
+    match_clauses = [c["match"] for c in should if "match" in c]
+    matched_field_names = {name for clause in match_clauses for name in clause}
+    for entry in app.CONFIG.field_relevance.fields:
+        assert entry.field in matched_field_names
+    title_clause = next(c["title"] for c in match_clauses if "title" in c)
+    title_entry = next(e for e in app.CONFIG.field_relevance.fields if e.field == "title")
+    assert title_clause["boost"] == title_entry.boost
+    assert title_clause["operator"] == app.CONFIG.field_relevance.operator
+
+
+def test_field_relevance_adds_cross_fields_clause():
+    payload = app.build_search_query(
+        "kamera", enable_phrase=False, enable_fuzzy=False, enable_exact_asin=False, apply_intent_reranking=False,
+    )
+    should = payload["query"]["bool"]["must"][0]["bool"]["should"]
+    cross_fields = [c["multi_match"] for c in should if c.get("multi_match", {}).get("type") == "cross_fields"]
+    assert len(cross_fields) == 1
+    assert cross_fields[0]["operator"] == app.CONFIG.field_relevance.operator
+    assert cross_fields[0]["boost"] == app.CONFIG.field_relevance.cross_fields_boost
+
+
+def test_field_relevance_disabled_by_enable_multi_match_toggle():
+    from dataclasses import replace
+
+    # title_ranking's tiers are an independent lexical method (gated only by
+    # config, not by enable_multi_match — see its own tests below), so
+    # disable it here to isolate field_relevance's contribution to the
+    # should-clause count. Same pattern as
+    # test_no_lexical_methods_returns_match_none / test_category_signal_alone_cannot_produce_a_hit.
+    # exact_asin is kept ON (identical in both calls) as a stable baseline
+    # clause so turning field_relevance off doesn't trip the unrelated
+    # "zero lexical methods -> match_none" safety net, which would remove
+    # the `bool` key this test asserts on.
+    no_title_ranking_cfg = replace(
+        app.CONFIG, title_ranking=replace(app.CONFIG.title_ranking, enabled=False)
+    )
+    with_it = app.build_search_query(
+        "kamera", enable_phrase=False, enable_fuzzy=False,
+        apply_intent_reranking=False, config=no_title_ranking_cfg,
+    )
+    without_it = app.build_search_query(
+        "kamera", enable_phrase=False, enable_multi_match=False, enable_fuzzy=False,
+        apply_intent_reranking=False, config=no_title_ranking_cfg,
+    )
+    with_count = len(with_it["query"]["bool"]["must"][0]["bool"]["should"])
+    without_count = len(without_it["query"]["bool"]["must"][0]["bool"]["should"])
+    assert without_count == 1  # exact_asin only
+    assert with_count == without_count + len(app.CONFIG.field_relevance.fields) + 1
+
+
+def test_field_relevance_canonical_field_matches_share_one_canonical_key():
+    from services.search_service import _build_field_evidence_clauses
+
+    grouped = _build_field_evidence_clauses("kamera", app.CONFIG)
+    assert "title" in grouped
+    assert "title.tr" not in grouped
+    assert len(grouped["title"]) == 2  # one clause for `title`, one for `title.tr`
+
+
+def test_field_relevance_debug_names_present_only_when_requested():
+    without_debug = app.build_search_query("kamera", apply_intent_reranking=False)
+    with_debug = app.build_search_query("kamera", apply_intent_reranking=False, include_relevance_debug=True)
+
+    def _has_any_name(payload):
+        should = payload["query"]["bool"]["must"][0]["bool"]["should"]
+        return any("_name" in c.get("match", {}).get(f, {}) for c in should for f in c.get("match", {}))
+
+    assert not _has_any_name(without_debug)
+    assert _has_any_name(with_debug)
 
 
 def test_autocomplete_uses_configured_field_and_operator():
