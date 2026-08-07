@@ -22,21 +22,6 @@
   "search_methods": {
     "exact_asin": { "field": "parent_asin", "boost": 25 },
     "phrase": { "field": "title", "boost": 10 },
-    "multi_match": {
-      "type": "best_fields",
-      "operator": "and",
-      "boost": 4,
-      "fields": {
-        "title": 7,
-        "title.tr": 6,
-        "categories_text": 3,
-        "categories_text.tr": 3,
-        "description": 1.5,
-        "description.tr": 1.5,
-        "features": 1.5,
-        "features.tr": 1.5
-      }
-    },
     "fuzzy": {
       "type": "best_fields",
       "fuzziness": "AUTO",
@@ -111,6 +96,41 @@
     "manual_category_boost_cap": 5.0,
     "dynamic_category_boost_cap": 2.0,
     "negative_penalty_floor": 0.3
+  },
+  "field_relevance": {
+    "enabled": true,
+    "operator": "and",
+    "fields": {
+      "title": 5.0,
+      "title.tr": 4.0,
+      "features": 3.0,
+      "features.tr": 2.5,
+      "description": 1.5,
+      "description.tr": 1.2,
+      "categories_text": 2.0,
+      "categories_text.tr": 1.8
+    },
+    "cross_fields_boost": 3.0,
+    "store_boost": 0.5
+  },
+  "field_consensus": {
+    "enabled": true,
+    "two_field_boost": 1.15,
+    "three_field_boost": 1.30,
+    "four_plus_field_boost": 1.45,
+    "counted_fields": ["title", "features", "description", "categories_text"]
+  },
+  "relevance_contradiction": {
+    "enabled": true,
+    "minimum_conflicting_fields": 2,
+    "strong_conflicting_fields": 3,
+    "mild_penalty": 0.65,
+    "strong_penalty": 0.30,
+    "minimum_penalty": 0.15,
+    "counted_fields": ["description", "features", "categories_text"]
+  },
+  "relevance_debug": {
+    "explain_top_n": 20
   },
   "source_fields": {
     "search": [

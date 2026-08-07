@@ -36,12 +36,6 @@ def _minimal_search_config(**overrides):
         "search_methods": {
             "exact_asin": {"field": "parent_asin", "boost": 25},
             "phrase": {"field": "title", "boost": 10},
-            "multi_match": {
-                "type": "best_fields",
-                "operator": "and",
-                "boost": 4,
-                "fields": {"title": 7},
-            },
             "fuzzy": {
                 "type": "best_fields",
                 "fuzziness": "AUTO",
@@ -127,6 +121,30 @@ def _minimal_search_config(**overrides):
             "dynamic_category_boost_cap": 2.0,
             "negative_penalty_floor": 0.3,
         },
+        "field_relevance": {
+            "enabled": True,
+            "operator": "and",
+            "fields": {"title": 5.0, "features": 3.0},
+            "cross_fields_boost": 3.0,
+            "store_boost": 0.5,
+        },
+        "field_consensus": {
+            "enabled": True,
+            "two_field_boost": 1.15,
+            "three_field_boost": 1.30,
+            "four_plus_field_boost": 1.45,
+            "counted_fields": ["title", "features", "description", "categories_text"],
+        },
+        "relevance_contradiction": {
+            "enabled": True,
+            "minimum_conflicting_fields": 2,
+            "strong_conflicting_fields": 3,
+            "mild_penalty": 0.65,
+            "strong_penalty": 0.30,
+            "minimum_penalty": 0.15,
+            "counted_fields": ["description", "features", "categories_text"],
+        },
+        "relevance_debug": {"explain_top_n": 20},
     }
     for dotted_key, value in overrides.items():
         section, _, field_name = dotted_key.partition(".")
@@ -176,7 +194,7 @@ def test_empty_search_index_list_is_rejected(tmp_path):
 
 def test_empty_required_field_list_is_rejected(tmp_path):
     data = _minimal_search_config()
-    data["search_methods"]["multi_match"]["fields"] = {}
+    data["field_relevance"]["fields"] = {}
     path = _write_json(tmp_path / "search_config.json", data)
     with pytest.raises(ConfigError):
         load_search_config(path)
@@ -570,3 +588,149 @@ def test_iphone_case_rule_loads_from_default_repo_config():
     assert set(rule.all_terms) == {"iphone", "case"}
     assert rule.positive_categories
     assert rule.soft_negative_categories
+
+
+def test_field_relevance_loads_from_default_repo_config():
+    app_config = load_search_config()
+    assert app_config.field_relevance.enabled is True
+    assert app_config.field_relevance.fields
+    assert app_config.field_relevance.cross_fields_boost > 0
+    assert app_config.field_relevance.store_boost >= 0
+
+
+def test_field_relevance_canonical_fields_dedupes_tr_variant():
+    app_config = load_search_config()
+    canonical = app_config.field_relevance.canonical_fields
+    assert "title" in canonical
+    assert "title.tr" not in canonical
+    assert len(canonical) == len(set(canonical))
+
+
+def test_field_relevance_missing_section_is_rejected(tmp_path):
+    data = _minimal_search_config()
+    del data["field_relevance"]
+    path = _write_json(tmp_path / "search_config.json", data)
+    with pytest.raises(ConfigError):
+        load_search_config(path)
+
+
+def test_field_relevance_negative_cross_fields_boost_is_rejected(tmp_path):
+    data = _minimal_search_config()
+    data["field_relevance"]["cross_fields_boost"] = -1
+    path = _write_json(tmp_path / "search_config.json", data)
+    with pytest.raises(ConfigError):
+        load_search_config(path)
+
+
+def test_search_methods_no_longer_has_multi_match():
+    app_config = load_search_config()
+    assert not hasattr(app_config.search_methods, "multi_match")
+
+
+def test_field_consensus_loads_from_default_repo_config():
+    app_config = load_search_config()
+    assert app_config.field_consensus.enabled is True
+    assert app_config.field_consensus.two_field_boost > 1.0
+    assert app_config.field_consensus.counted_fields
+
+
+def test_field_consensus_missing_section_is_rejected(tmp_path):
+    data = _minimal_search_config()
+    del data["field_consensus"]
+    path = _write_json(tmp_path / "search_config.json", data)
+    with pytest.raises(ConfigError):
+        load_search_config(path)
+
+
+def test_field_consensus_tiers_must_be_non_decreasing(tmp_path):
+    data = _minimal_search_config()
+    data["field_consensus"]["three_field_boost"] = 1.0  # below two_field_boost (1.15)
+    path = _write_json(tmp_path / "search_config.json", data)
+    with pytest.raises(ConfigError):
+        load_search_config(path)
+
+
+def test_relevance_contradiction_loads_from_default_repo_config():
+    app_config = load_search_config()
+    assert app_config.relevance_contradiction.enabled is True
+    assert 0 < app_config.relevance_contradiction.minimum_penalty <= app_config.relevance_contradiction.strong_penalty
+    assert app_config.relevance_contradiction.strong_penalty < app_config.relevance_contradiction.mild_penalty
+
+
+def test_relevance_contradiction_missing_section_is_rejected(tmp_path):
+    data = _minimal_search_config()
+    del data["relevance_contradiction"]
+    path = _write_json(tmp_path / "search_config.json", data)
+    with pytest.raises(ConfigError):
+        load_search_config(path)
+
+
+def test_relevance_contradiction_penalty_ordering_is_enforced(tmp_path):
+    data = _minimal_search_config()
+    data["relevance_contradiction"]["strong_penalty"] = 0.9  # not < mild_penalty (0.65)
+    path = _write_json(tmp_path / "search_config.json", data)
+    with pytest.raises(ConfigError):
+        load_search_config(path)
+
+
+def test_relevance_contradiction_penalty_below_floor_is_rejected(tmp_path):
+    data = _minimal_search_config()
+    data["relevance_contradiction"]["minimum_penalty"] = 0.5  # above strong_penalty (0.30)
+    path = _write_json(tmp_path / "search_config.json", data)
+    with pytest.raises(ConfigError):
+        load_search_config(path)
+
+
+def test_relevance_contradiction_strong_fields_must_exceed_minimum(tmp_path):
+    data = _minimal_search_config()
+    data["relevance_contradiction"]["strong_conflicting_fields"] = 2  # not > minimum (2)
+    path = _write_json(tmp_path / "search_config.json", data)
+    with pytest.raises(ConfigError):
+        load_search_config(path)
+
+
+def test_relevance_debug_loads_from_default_repo_config():
+    app_config = load_search_config()
+    assert app_config.relevance_debug.explain_top_n > 0
+
+
+def test_relevance_debug_non_positive_top_n_is_rejected(tmp_path):
+    data = _minimal_search_config()
+    data["relevance_debug"] = {"explain_top_n": 0}
+    path = _write_json(tmp_path / "search_config.json", data)
+    with pytest.raises(ConfigError):
+        load_search_config(path)
+
+
+def test_intent_rule_contradiction_terms_parsed(tmp_path):
+    path = _write_json(
+        tmp_path / "intent_rules.json",
+        {
+            "men_perfume": {
+                "all_terms": ["men", "perfume"],
+                "contradiction_terms": ["moisturizer", "face cream"],
+                "label": "x",
+                "icon": "",
+            }
+        },
+    )
+    rules = load_intent_rules(path)
+    assert rules["men_perfume"].contradiction_terms == ("moisturizer", "face cream")
+
+
+def test_intent_rule_contradiction_terms_default_empty(tmp_path):
+    path = _write_json(
+        tmp_path / "intent_rules.json",
+        {"watch": {"query_terms": ["watch"], "label": "x", "icon": ""}},
+    )
+    rules = load_intent_rules(path)
+    assert rules["watch"].contradiction_terms == ()
+
+
+def test_men_perfume_rule_loads_from_default_repo_config():
+    rules = load_intent_rules()
+    assert "men_perfume" in rules
+    rule = rules["men_perfume"]
+    assert set(rule.all_terms) == {"men", "perfume"}
+    assert rule.contradiction_terms
+    assert rule.positive_categories

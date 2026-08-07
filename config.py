@@ -67,10 +67,10 @@ def _require_str_list(value: Any, context: str, allow_empty: bool = False) -> tu
     return tuple(value)
 
 
-def _require_positive_number(value: Any, context: str) -> float:
+def _require_positive_number(value: Any, context: str, allow_zero: bool = False) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ConfigError(f"{context} sayı olmalı, alınan: {value!r}")
-    if value <= 0:
+    if value < 0 or (not allow_zero and value == 0):
         raise ConfigError(f"{context} pozitif olmalı, alınan: {value!r}")
     return float(value)
 
@@ -160,7 +160,6 @@ class AutocompleteQueryConfig:
 class SearchMethodsConfig:
     exact_asin: FieldBoost
     phrase: FieldBoost
-    multi_match: MultiFieldQueryConfig
     fuzzy: MultiFieldQueryConfig
     autocomplete: AutocompleteQueryConfig
 
@@ -273,6 +272,81 @@ class CategoryPenaltyEntry:
 
 
 @dataclass(frozen=True)
+class FieldRelevanceConfig:
+    """`title`/`features`/`description`/`categories_text` (+ `.tr`) üzerinde
+    query-time relevance için tekli-alan `match` madde ağırlıkları. Eski
+    `search_methods.multi_match`in YERİNE geçer (bkz. spec §3) — dis_max
+    yerine ADDİTİF (`bool.should` toplamı) puanlanır, bu da field consensus'u
+    (bkz. FieldConsensusConfig) mümkün kılan şeydir. `store` BİLEREK bu
+    listede yer almaz (bkz. spec §3/§6) — yalnızca ayrı, düşük ağırlıklı
+    `store_boost` üzerinden katkı sağlar, hiçbir zorunlu-eşleşme veya
+    consensus/contradiction sayımına dahil edilmez."""
+
+    enabled: bool
+    operator: str
+    fields: tuple[FieldBoost, ...]
+    cross_fields_boost: float
+    store_boost: float
+
+    @property
+    def es_fields(self) -> list[str]:
+        return [f"{item.field}^{item.boost}" for item in self.fields]
+
+    @property
+    def canonical_fields(self) -> tuple[str, ...]:
+        """`.tr` soneki çıkarılmış, tekilleştirilmiş, sıra korunmuş alan
+        adları (`title` ve `title.tr` TEK bir `"title"` girdisi olur) —
+        böylece bir Türkçe/İngilizce dil çifti consensus/contradiction
+        sayımında iki ayrı alan gibi görünmez (bkz. spec §4)."""
+        seen: list[str] = []
+        for item in self.fields:
+            base = item.field[: -len(".tr")] if item.field.endswith(".tr") else item.field
+            if base not in seen:
+                seen.append(base)
+        return tuple(seen)
+
+
+@dataclass(frozen=True)
+class FieldConsensusConfig:
+    """Sorgunun BAĞIMSIZ birden fazla alanda GERÇEKTEN eşleştiği (var
+    olmakla YETİNMEDİĞİ — bkz. spec §4 düzeltmesi) belgeler için kademeli
+    çarpan. `counted_fields`, hangi kanonik alanların bu sayıma dahil
+    olduğunu açıkça listeler (`store` asla burada değildir)."""
+
+    enabled: bool
+    two_field_boost: float
+    three_field_boost: float
+    four_plus_field_boost: float
+    counted_fields: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class RelevanceContradictionConfig:
+    """`intent_rules.json`daki `contradiction_terms`in (bkz. IntentRule),
+    `counted_fields`teki alanlarda GERÇEKTEN eşleştiği (yine `exists` DEĞİL
+    — bkz. spec §5 düzeltmesi) belge sayısına göre kademeli penalty.
+    `title` BİLEREK `counted_fields` dışındadır — title zaten yanlış-pozitif
+    riskini yaratan alan, kontrol edilen 'diğer' alanlardır."""
+
+    enabled: bool
+    minimum_conflicting_fields: int
+    strong_conflicting_fields: int
+    mild_penalty: float
+    strong_penalty: float
+    minimum_penalty: float
+    counted_fields: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class RelevanceDebugConfig:
+    """`debug_relevance=true` altında ES'in native `_name`/`matched_queries`
+    mekanizmasından (bkz. spec §8, canlı cluster'da doğrulandı) türetilen
+    per-hit debug bilgisinin kaç hit için üretileceğini sınırlar."""
+
+    explain_top_n: int
+
+
+@dataclass(frozen=True)
 class PaginationConfig:
     """Basit `from + size` tabanlı sayfalama ayarları.
 
@@ -355,6 +429,10 @@ class AppConfig:
     quality_ranking: QualityRankingConfig
     title_ranking: TitleRankingConfig
     intent_ranking: IntentRankingConfig
+    field_relevance: FieldRelevanceConfig
+    field_consensus: FieldConsensusConfig
+    relevance_contradiction: RelevanceContradictionConfig
+    relevance_debug: RelevanceDebugConfig
     pagination: PaginationConfig
     source_fields: SourceFieldsConfig
     ui: UIConfig
@@ -384,6 +462,7 @@ class IntentRule:
     excluded_terms: tuple[str, ...] = ()  # `excluded_when_query_contains`in yeni adı
     positive_categories: tuple[CategoryBoostEntry, ...] = ()  # yeni: obje-biçimli boost
     soft_negative_categories: tuple[CategoryPenaltyEntry, ...] = ()  # yeni: obje-biçimli penalty
+    contradiction_terms: tuple[str, ...] = ()  # yeni: serbest metin çelişki terimleri (bkz. spec §5)
 
 
 @dataclass(frozen=True)
@@ -407,16 +486,6 @@ def _build_field_boosts(raw: Any, context: str) -> tuple[FieldBoost, ...]:
     return tuple(boosts)
 
 
-def _build_multi_match(raw: Any, context: str) -> MultiFieldQueryConfig:
-    raw = _require_dict(raw, context)
-    return MultiFieldQueryConfig(
-        type=_require_str(raw.get("type"), f"{context}.type"),
-        operator=_require_str(raw.get("operator"), f"{context}.operator"),
-        boost=_require_positive_number(raw.get("boost"), f"{context}.boost"),
-        fields=_build_field_boosts(raw.get("fields"), f"{context}.fields"),
-    )
-
-
 def _build_dynamic_intent(raw: Any, context: str) -> DynamicIntentConfig:
     raw = _require_dict(raw, context)
     aggregation_fields = _require_str_list(raw.get("aggregation_fields"), f"{context}.aggregation_fields")
@@ -437,6 +506,73 @@ def _build_dynamic_intent(raw: Any, context: str) -> DynamicIntentConfig:
         timeout_seconds=_require_positive_int(raw.get("timeout_seconds"), f"{context}.timeout_seconds"),
         search_fields=_build_field_boosts(raw.get("search_fields"), f"{context}.search_fields"),
         aggregation_fields=aggregation_fields,
+    )
+
+
+def _build_field_relevance(raw: Any, context: str) -> FieldRelevanceConfig:
+    raw = _require_dict(raw, context)
+    return FieldRelevanceConfig(
+        enabled=_require_bool(raw.get("enabled"), f"{context}.enabled"),
+        operator=_require_str(raw.get("operator"), f"{context}.operator"),
+        fields=_build_field_boosts(raw.get("fields"), f"{context}.fields"),
+        cross_fields_boost=_require_positive_number(raw.get("cross_fields_boost"), f"{context}.cross_fields_boost"),
+        store_boost=_require_positive_number(raw.get("store_boost"), f"{context}.store_boost", allow_zero=True),
+    )
+
+
+def _build_field_consensus(raw: Any, context: str) -> FieldConsensusConfig:
+    raw = _require_dict(raw, context)
+    two = _require_positive_number(raw.get("two_field_boost"), f"{context}.two_field_boost")
+    three = _require_positive_number(raw.get("three_field_boost"), f"{context}.three_field_boost")
+    four_plus = _require_positive_number(raw.get("four_plus_field_boost"), f"{context}.four_plus_field_boost")
+    if not (two <= three <= four_plus):
+        raise ConfigError(
+            f"{context}: two_field_boost <= three_field_boost <= four_plus_field_boost olmalı "
+            f"(alınan: {two}, {three}, {four_plus})."
+        )
+    return FieldConsensusConfig(
+        enabled=_require_bool(raw.get("enabled"), f"{context}.enabled"),
+        two_field_boost=two,
+        three_field_boost=three,
+        four_plus_field_boost=four_plus,
+        counted_fields=tuple(_require_str_list(raw.get("counted_fields"), f"{context}.counted_fields")),
+    )
+
+
+def _build_relevance_contradiction(raw: Any, context: str) -> RelevanceContradictionConfig:
+    raw = _require_dict(raw, context)
+    minimum_fields = _require_positive_int(raw.get("minimum_conflicting_fields"), f"{context}.minimum_conflicting_fields")
+    strong_fields = _require_positive_int(raw.get("strong_conflicting_fields"), f"{context}.strong_conflicting_fields")
+    if strong_fields <= minimum_fields:
+        raise ConfigError(f"{context}.strong_conflicting_fields, minimum_conflicting_fields'tan büyük olmalı.")
+
+    mild_penalty = _require_positive_number(raw.get("mild_penalty"), f"{context}.mild_penalty")
+    strong_penalty = _require_positive_number(raw.get("strong_penalty"), f"{context}.strong_penalty")
+    minimum_penalty = _require_positive_number(raw.get("minimum_penalty"), f"{context}.minimum_penalty")
+    for name, value in (("mild_penalty", mild_penalty), ("strong_penalty", strong_penalty), ("minimum_penalty", minimum_penalty)):
+        if value > 1:
+            raise ConfigError(f"{context}.{name} 0-1 aralığında olmalı.")
+    if not (minimum_penalty <= strong_penalty < mild_penalty):
+        raise ConfigError(
+            f"{context}: minimum_penalty <= strong_penalty < mild_penalty olmalı "
+            f"(alınan: {minimum_penalty}, {strong_penalty}, {mild_penalty})."
+        )
+
+    return RelevanceContradictionConfig(
+        enabled=_require_bool(raw.get("enabled"), f"{context}.enabled"),
+        minimum_conflicting_fields=minimum_fields,
+        strong_conflicting_fields=strong_fields,
+        mild_penalty=mild_penalty,
+        strong_penalty=strong_penalty,
+        minimum_penalty=minimum_penalty,
+        counted_fields=tuple(_require_str_list(raw.get("counted_fields"), f"{context}.counted_fields")),
+    )
+
+
+def _build_relevance_debug(raw: Any, context: str) -> RelevanceDebugConfig:
+    raw = _require_dict(raw, context)
+    return RelevanceDebugConfig(
+        explain_top_n=_require_positive_int(raw.get("explain_top_n"), f"{context}.explain_top_n"),
     )
 
 
@@ -623,7 +759,6 @@ def load_search_config(path: Path = SEARCH_CONFIG_PATH) -> AppConfig:
         boost=_require_positive_number(phrase_raw.get("boost"), "search_methods.phrase.boost"),
     )
 
-    multi_match = _build_multi_match(methods_raw.get("multi_match"), "search_methods.multi_match")
     fuzzy = _build_fuzzy(methods_raw.get("fuzzy"), "search_methods.fuzzy")
 
     autocomplete_raw = _require_dict(methods_raw.get("autocomplete"), "search_methods.autocomplete")
@@ -635,7 +770,6 @@ def load_search_config(path: Path = SEARCH_CONFIG_PATH) -> AppConfig:
     search_methods = SearchMethodsConfig(
         exact_asin=exact_asin,
         phrase=phrase,
-        multi_match=multi_match,
         fuzzy=fuzzy,
         autocomplete=autocomplete,
     )
@@ -664,6 +798,10 @@ def load_search_config(path: Path = SEARCH_CONFIG_PATH) -> AppConfig:
     quality_ranking = _build_quality_ranking(raw.get("quality_ranking"), "quality_ranking")
     title_ranking = _build_title_ranking(raw.get("title_ranking"), "title_ranking")
     intent_ranking = _build_intent_ranking(raw.get("intent_ranking"), "intent_ranking")
+    field_relevance = _build_field_relevance(raw.get("field_relevance"), "field_relevance")
+    field_consensus = _build_field_consensus(raw.get("field_consensus"), "field_consensus")
+    relevance_contradiction = _build_relevance_contradiction(raw.get("relevance_contradiction"), "relevance_contradiction")
+    relevance_debug = _build_relevance_debug(raw.get("relevance_debug"), "relevance_debug")
     pagination = _build_pagination(raw.get("pagination"), "pagination")
 
     source_fields_raw = _require_dict(raw.get("source_fields"), "source_fields")
@@ -702,6 +840,10 @@ def load_search_config(path: Path = SEARCH_CONFIG_PATH) -> AppConfig:
         quality_ranking=quality_ranking,
         title_ranking=title_ranking,
         intent_ranking=intent_ranking,
+        field_relevance=field_relevance,
+        field_consensus=field_consensus,
+        relevance_contradiction=relevance_contradiction,
+        relevance_debug=relevance_debug,
         pagination=pagination,
         source_fields=source_fields,
         ui=ui,
@@ -832,6 +974,11 @@ def load_intent_rules(path: Path = INTENT_RULES_PATH) -> dict[str, IntentRule]:
                 rule_raw.get("positive_categories"), f"{context}.positive_categories"
             ),
             soft_negative_categories=soft_negative_categories,
+            contradiction_terms=tuple(
+                _require_str_list(
+                    rule_raw.get("contradiction_terms", []), f"{context}.contradiction_terms", allow_empty=True
+                )
+            ),
         )
 
     return rules

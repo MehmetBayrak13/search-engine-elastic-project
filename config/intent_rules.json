@@ -31,5 +31,17 @@
     "label": "iPhone kılıfı niyeti algılandı",
     "icon": "📱",
     "enabled": true
+  },
+  "men_perfume": {
+    "all_terms": ["men", "perfume"],
+    "positive_categories": [
+      {"value": "Fragrance", "boost": 3.0}
+    ],
+    "contradiction_terms": [
+      "moisturizer", "face cream", "hydrating lotion", "facial care", "body lotion", "sunscreen"
+    ],
+    "label": "Erkek parfüm niyeti algılandı",
+    "icon": "🧴",
+    "enabled": true
   }
 }
