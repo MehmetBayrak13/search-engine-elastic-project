@@ -29,6 +29,7 @@ export default function App() {
   const [flags, setFlags] = useState(DEFAULT_FLAGS);
   const [liveSuggestions, setLiveSuggestions] = useState(true);
   const [esOk, setEsOk] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
 
   const [searchBoxValue, setSearchBoxValue] = useState('');
   const [searchBoxRevision, setSearchBoxRevision] = useState(0);
@@ -180,14 +181,27 @@ export default function App() {
       <Hero hero={config.hero} />
 
       <div className="layout">
-        <SidebarSettings
-          config={config}
-          flags={flags}
-          onFlagsChange={setFlags}
-          liveSuggestions={liveSuggestions}
-          onLiveSuggestionsChange={setLiveSuggestions}
-          esOk={esOk}
-        />
+        <div className={`sidebar-shell${sidebarOpen ? '' : ' is-collapsed'}`} aria-hidden={!sidebarOpen}>
+          <SidebarSettings
+            config={config}
+            flags={flags}
+            onFlagsChange={setFlags}
+            liveSuggestions={liveSuggestions}
+            onLiveSuggestionsChange={setLiveSuggestions}
+            esOk={esOk}
+          />
+        </div>
+
+        <button
+          type="button"
+          className="sidebar-toggle"
+          onClick={() => setSidebarOpen((open) => !open)}
+          aria-expanded={sidebarOpen}
+          aria-label={sidebarOpen ? 'Ayarlar panelini gizle' : 'Ayarlar panelini göster'}
+          title={sidebarOpen ? 'Ayarlar panelini gizle' : 'Ayarlar panelini göster'}
+        >
+          {sidebarOpen ? '‹' : '›'}
+        </button>
 
         <main className="main-column">
           <div className="search-row">
