@@ -625,6 +625,63 @@ def _soft_negative_boosting_negative_clause(negative_categories: tuple[dict, ...
     return {"bool": {"should": should, "minimum_should_match": 1}}, negative_boost
 
 
+def _consensus_tier_filter(
+    evidence_by_field: dict[str, list[dict]], counted_fields: tuple[str, ...], minimum: int, *, name: str | None = None
+) -> dict:
+    """`counted_fields`teki her kanonik alan için, o alanın GERÇEK kanıt
+    maddelerinden (Task 2'nin ürettiği aynı `match` nesneleri — YENİDEN
+    TÜRETİLMEZ) tek bir OR grubu kurar, sonra bu grupları
+    `minimum_should_match: minimum` ile sayar. Bir alanın hiç kanıt
+    maddesi yoksa (`field_relevance.fields`te tanımlı değilse) o alan
+    sessizce atlanır — asla `exists` kullanılmaz (bkz. spec §4 düzeltmesi)."""
+    should: list[dict] = []
+    for field in counted_fields:
+        clauses = evidence_by_field.get(field)
+        if not clauses:
+            continue
+        should.append({"bool": {"should": clauses, "minimum_should_match": 1}})
+    filt: dict = {"bool": {"should": should, "minimum_should_match": minimum}}
+    if name:
+        filt["bool"]["_name"] = name
+    return filt
+
+
+def _apply_field_consensus(
+    base_query: dict, evidence_by_field: dict[str, list[dict]], cfg: "AppConfig", *, debug_names: bool = False
+) -> dict:
+    """Bağımsız birden fazla alanda GERÇEKTEN eşleşen belgeler için
+    kademeli çarpan uygular (bkz. spec §4). `score_mode: max` yalnızca EN
+    YÜKSEK uygulanabilir kademenin ağırlığını kullanır (bileşik/katlanmış
+    ÇARPIM DEĞİL); hiçbir kademe eşleşmezse fonksiyon no-op'tur
+    (`boost_mode: multiply` × hiçbir şey = ×1) — `_build_quality_functions`
+    ile aynı filter+weight kuralı, `script_score` YOK."""
+    fc = cfg.field_consensus
+    if not fc.enabled:
+        return base_query
+    tiers = (
+        (2, fc.two_field_boost, "consensus:two_plus"),
+        (3, fc.three_field_boost, "consensus:three_plus"),
+        (4, fc.four_plus_field_boost, "consensus:four_plus"),
+    )
+    functions = [
+        {
+            "filter": _consensus_tier_filter(
+                evidence_by_field, fc.counted_fields, minimum, name=name if debug_names else None
+            ),
+            "weight": weight,
+        }
+        for minimum, weight, name in tiers
+    ]
+    return {
+        "function_score": {
+            "query": base_query,
+            "functions": functions,
+            "score_mode": "max",
+            "boost_mode": "multiply",
+        }
+    }
+
+
 def build_search_query(
     query_text: str,
     enable_phrase: bool = True,
@@ -826,6 +883,10 @@ def build_search_query(
         bool_query["must_not"] = list(intent_signals.legacy_hard_exclusions)
 
     base_query = {"bool": bool_query}
+
+    base_query = _apply_field_consensus(
+        base_query, field_relevance_evidence, cfg, debug_names=include_relevance_debug
+    )
 
     negative_clause, negative_boost = _soft_negative_boosting_negative_clause(
         intent_signals.negative_categories

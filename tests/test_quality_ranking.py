@@ -22,6 +22,15 @@ def _with_quality_ranking(**overrides):
 @pytest.fixture(autouse=True)
 def _restore_config():
     original = app.search_service.CONFIG
+    # field_consensus (Task 3) wraps the query in its own `function_score`
+    # independent of quality_ranking, which would otherwise make this
+    # file's `"function_score" in payload["query"]` assertions ambiguous
+    # about which wrapper they're seeing. Disable it here so this file
+    # stays scoped to quality_ranking's own wrapper — field_consensus has
+    # its own dedicated tests in tests/test_query_builders.py.
+    app.search_service.CONFIG = dataclasses.replace(
+        original, field_consensus=dataclasses.replace(original.field_consensus, enabled=False)
+    )
     yield
     app.search_service.CONFIG = original
 

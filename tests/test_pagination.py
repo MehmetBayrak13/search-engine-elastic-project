@@ -29,6 +29,23 @@ def _with_pagination(**overrides):
     return dataclasses.replace(app.search_service.CONFIG, pagination=pagination)
 
 
+def _innermost_query(query_node):
+    """Test helper: `build_search_query` wraps the base `{"bool": ...}` query
+    in a `field_consensus` `function_score` (Task 3) — and optionally a
+    `boosting`/another `function_score` on top of that. Peels back those
+    wrappers to reach the actual `bool` query node so structural assertions
+    written before Task 3 keep checking real behavior."""
+    node = query_node
+    while isinstance(node, dict):
+        if "function_score" in node:
+            node = node["function_score"]["query"]
+        elif "boosting" in node:
+            node = node["boosting"]["positive"]
+        else:
+            break
+    return node
+
+
 @pytest.fixture(autouse=True)
 def _restore_config():
     original = app.search_service.CONFIG
@@ -294,7 +311,7 @@ def test_settings_unchanged_when_signature_matches():
 
 def test_lexical_bool_must_preserved_with_page_param():
     payload = app.build_search_query("kamera", page=2, apply_intent_reranking=False)
-    must = payload["query"]["bool"]["must"]
+    must = _innermost_query(payload["query"])["bool"]["must"]
     assert len(must) == 1
     assert "should" in must[0]["bool"]
     assert must[0]["bool"]["minimum_should_match"] == 1
@@ -302,7 +319,7 @@ def test_lexical_bool_must_preserved_with_page_param():
 
 def test_exact_asin_preserved_with_page_param():
     payload = app.build_search_query("B000123456", page=2, apply_intent_reranking=False)
-    lexical = payload["query"]["bool"]["must"][0]["bool"]["should"]
+    lexical = _innermost_query(payload["query"])["bool"]["must"][0]["bool"]["should"]
     field = app.search_service.CONFIG.search_methods.exact_asin.field
     # `term` clauses also come from the independent title_ranking exact tier
     # (title.keyword), so filter for the exact-ASIN field specifically
@@ -314,7 +331,7 @@ def test_exact_asin_preserved_with_page_param():
 
 def test_turkish_expansion_preserved_with_page_param():
     payload = app.build_search_query("kablosuz kulaklık", page=2, apply_intent_reranking=False)
-    lexical = payload["query"]["bool"]["must"][0]["bool"]["should"]
+    lexical = _innermost_query(payload["query"])["bool"]["must"][0]["bool"]["should"]
     assert len(lexical) >= 5  # 4 standart lexical + en az 1 çeviri alternatifi
 
 
@@ -332,7 +349,15 @@ def test_dynamic_category_discovery_preserved_with_pagination(monkeypatch):
 
 def test_quality_ranking_stays_disabled_by_default_with_pagination():
     assert app.search_service.CONFIG.quality_ranking.enabled is False
-    payload = app.build_search_query("kamera", page=2, apply_intent_reranking=False)
+    # field_consensus (Task 3) adds its own independent `function_score`
+    # wrapper (default-enabled); disable it here so this assertion stays
+    # scoped to quality_ranking's own wrapper, not a false positive/negative
+    # from an unrelated feature's function_score.
+    no_consensus_cfg = dataclasses.replace(
+        app.search_service.CONFIG,
+        field_consensus=dataclasses.replace(app.search_service.CONFIG.field_consensus, enabled=False),
+    )
+    payload = app.build_search_query("kamera", page=2, apply_intent_reranking=False, config=no_consensus_cfg)
     assert "function_score" not in payload["query"]
 
 

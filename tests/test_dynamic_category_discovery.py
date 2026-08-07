@@ -15,6 +15,23 @@ import pytest
 import app
 
 
+def _innermost_query(query_node):
+    """Test helper: `build_search_query` wraps the base `{"bool": ...}` query
+    in a `field_consensus` `function_score` (Task 3) — and optionally a
+    `boosting`/another `function_score` on top of that. Peels back those
+    wrappers to reach the actual `bool` query node so structural assertions
+    written before Task 3 keep checking real behavior."""
+    node = query_node
+    while isinstance(node, dict):
+        if "function_score" in node:
+            node = node["function_score"]["query"]
+        elif "boosting" in node:
+            node = node["boosting"]["positive"]
+        else:
+            break
+    return node
+
+
 AGGREGATIONS_WITH_TOILET_PAPER = {
     "by_categories": {
         "buckets": [
@@ -119,7 +136,7 @@ def test_discovery_failure_does_not_break_normal_search(monkeypatch):
     # search_products'ın kullandığı üst seviye fonksiyon da patlamamalı.
     signals = app.resolve_intent_signals("toilet paper", include_dynamic=True)
     payload = app.build_search_query("toilet paper", intent_signals=signals)
-    assert payload["query"]["bool"]["must"], "lexical grup hâlâ zorunlu kalmalı"
+    assert _innermost_query(payload["query"])["bool"]["must"], "lexical grup hâlâ zorunlu kalmalı"
 
 
 def test_dynamic_boosts_under_should_lexical_under_must(monkeypatch):
@@ -129,8 +146,9 @@ def test_dynamic_boosts_under_should_lexical_under_must(monkeypatch):
     )
     signals = app.resolve_intent_signals("toilet paper", include_dynamic=True)
     payload = app.build_search_query("toilet paper", intent_signals=signals)
-    must = payload["query"]["bool"]["must"]
-    should = payload["query"]["bool"].get("should", [])
+    inner_query = _innermost_query(payload["query"])
+    must = inner_query["bool"]["must"]
+    should = inner_query["bool"].get("should", [])
 
     assert "should" in must[0]["bool"], "lexical zorunlu eşleşme bool.must altında olmalı"
     assert any(
@@ -209,7 +227,7 @@ def test_app_imports_and_builds_normal_search_query():
     assert app.search_service.CONFIG is not None
     assert app.search_service.CONFIG.quality_ranking is not None
     query = app.build_search_query("toilet paper")
-    assert "bool" in query["query"]
+    assert "bool" in _innermost_query(query["query"])
 
 
 def test_no_hardcoded_watch_check_in_app_py():

@@ -1,6 +1,23 @@
 import app
 
 
+def _innermost_query(query_node):
+    """Test helper: `build_search_query` wraps the base `{"bool": ...}` query
+    in a `field_consensus` `function_score` (Task 3) — and optionally a
+    `boosting`/another `function_score` on top of that. Peels back those
+    wrappers to reach the actual `bool` query node so structural assertions
+    written before Task 3 keep checking real behavior."""
+    node = query_node
+    while isinstance(node, dict):
+        if "function_score" in node:
+            node = node["function_score"]["query"]
+        elif "boosting" in node:
+            node = node["boosting"]["positive"]
+        else:
+            break
+    return node
+
+
 def test_phrase_translation_kablosuz_kulaklik():
     result = app.expand_multilingual_query("kablosuz kulaklık")
     assert "wireless headphones" in result["phrase_translations"]
@@ -58,14 +75,14 @@ def test_empty_query_does_not_crash():
 
 def test_translation_adds_lexical_alternative_without_bypassing_gate():
     payload = app.build_search_query("kablosuz kulaklık", apply_intent_reranking=False)
-    lexical = payload["query"]["bool"]["must"][0]["bool"]["should"]
+    lexical = _innermost_query(payload["query"])["bool"]["must"][0]["bool"]["should"]
     # 4 lexical yöntem (asin/phrase/multi/fuzzy) + en az 1 çeviri alternatifi.
     assert len(lexical) >= 5
 
 
 def test_english_query_without_translation_match_is_unaffected():
     with_translation = app.build_search_query("wireless headphones", apply_intent_reranking=False)
-    lexical = with_translation["query"]["bool"]["must"][0]["bool"]["should"]
+    lexical = _innermost_query(with_translation["query"])["bool"]["must"][0]["bool"]["should"]
     # Çeviri sözlüğünde eşleşme yok; asin(1) + phrase(1) + field_relevance
     # (8 alan + 1 cross_fields = 9, eski tekli multi_match'in YERİNE geçti)
     # + fuzzy(1) + title_ranking'in bağımsız 2 katmanı (exact + prefix) = 14,

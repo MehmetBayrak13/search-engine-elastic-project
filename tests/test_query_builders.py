@@ -15,6 +15,25 @@ def _tmp_path_config(tmp_path_factory, data):
     return path
 
 
+def _innermost_query(query_node):
+    """Test helper: `build_search_query` now wraps the base `{"bool": ...}`
+    query in a `field_consensus` `function_score` (Task 3) — and optionally
+    a `boosting` (soft-negative categories) and/or another `function_score`
+    (`quality_ranking`) on top of that. Peels back those wrappers to reach
+    the actual `bool` query node so structural assertions written before
+    Task 3 keep checking real behavior instead of failing on `KeyError`
+    (or, worse, silently passing on a `.get(..., {})` default)."""
+    node = query_node
+    while isinstance(node, dict):
+        if "function_score" in node:
+            node = node["function_score"]["query"]
+        elif "boosting" in node:
+            node = node["boosting"]["positive"]
+        else:
+            break
+    return node
+
+
 def test_build_search_query_config_override_changes_size_without_touching_global(tmp_path_factory):
     import services.search_service as search_service
 
@@ -53,7 +72,7 @@ def test_no_lexical_methods_returns_match_none():
 
 def test_lexical_queries_live_under_bool_must():
     payload = app.build_search_query("kamera", apply_intent_reranking=False)
-    must = payload["query"]["bool"]["must"]
+    must = _innermost_query(payload["query"])["bool"]["must"]
     assert len(must) == 1
     assert "should" in must[0]["bool"]
     assert must[0]["bool"]["minimum_should_match"] == 1
@@ -61,7 +80,7 @@ def test_lexical_queries_live_under_bool_must():
 
 def test_intent_boosts_live_under_outer_should():
     payload = app.build_search_query("smartwatch")
-    should = payload["query"]["bool"].get("should", [])
+    should = _innermost_query(payload["query"])["bool"].get("should", [])
     assert should, "watch intent sorgusu için should boostları bekleniyor"
     for clause in should:
         assert "match_phrase" in clause
@@ -69,18 +88,18 @@ def test_intent_boosts_live_under_outer_should():
 
 def test_intent_exclusions_live_under_must_not():
     payload = app.build_search_query("smartwatch")
-    must_not = payload["query"]["bool"].get("must_not", [])
+    must_not = _innermost_query(payload["query"])["bool"].get("must_not", [])
     assert must_not, "watch niyeti için kitap dışlaması bekleniyor"
 
 
 def test_watch_book_query_does_not_exclude_books():
     payload = app.build_search_query("watch book")
-    assert not payload["query"]["bool"].get("must_not")
+    assert not _innermost_query(payload["query"])["bool"].get("must_not")
 
 
 def test_exact_asin_field_and_boost_come_from_config():
     payload = app.build_search_query("B000123456", apply_intent_reranking=False)
-    lexical = payload["query"]["bool"]["must"][0]["bool"]["should"]
+    lexical = _innermost_query(payload["query"])["bool"]["must"][0]["bool"]["should"]
     field = app.CONFIG.search_methods.exact_asin.field
     boost = app.CONFIG.search_methods.exact_asin.boost
     # `term` clauses also come from the independent title_ranking exact tier
@@ -96,8 +115,8 @@ def test_fuzzy_switch_can_be_disabled():
     without_fuzzy = app.build_search_query(
         "kamera", enable_fuzzy=False, apply_intent_reranking=False
     )
-    with_count = len(with_fuzzy["query"]["bool"]["must"][0]["bool"]["should"])
-    without_count = len(without_fuzzy["query"]["bool"]["must"][0]["bool"]["should"])
+    with_count = len(_innermost_query(with_fuzzy["query"])["bool"]["must"][0]["bool"]["should"])
+    without_count = len(_innermost_query(without_fuzzy["query"])["bool"]["must"][0]["bool"]["should"])
     assert without_count == with_count - 1
 
 
@@ -109,7 +128,7 @@ def test_field_relevance_produces_one_match_clause_per_configured_field():
         enable_exact_asin=False,
         apply_intent_reranking=False,
     )
-    should = payload["query"]["bool"]["must"][0]["bool"]["should"]
+    should = _innermost_query(payload["query"])["bool"]["must"][0]["bool"]["should"]
     match_clauses = [c["match"] for c in should if "match" in c]
     matched_field_names = {name for clause in match_clauses for name in clause}
     for entry in app.CONFIG.field_relevance.fields:
@@ -124,7 +143,7 @@ def test_field_relevance_adds_cross_fields_clause():
     payload = app.build_search_query(
         "kamera", enable_phrase=False, enable_fuzzy=False, enable_exact_asin=False, apply_intent_reranking=False,
     )
-    should = payload["query"]["bool"]["must"][0]["bool"]["should"]
+    should = _innermost_query(payload["query"])["bool"]["must"][0]["bool"]["should"]
     cross_fields = [c["multi_match"] for c in should if c.get("multi_match", {}).get("type") == "cross_fields"]
     assert len(cross_fields) == 1
     assert cross_fields[0]["operator"] == app.CONFIG.field_relevance.operator
@@ -154,8 +173,8 @@ def test_field_relevance_disabled_by_enable_multi_match_toggle():
         "kamera", enable_phrase=False, enable_multi_match=False, enable_fuzzy=False,
         apply_intent_reranking=False, config=no_title_ranking_cfg,
     )
-    with_count = len(with_it["query"]["bool"]["must"][0]["bool"]["should"])
-    without_count = len(without_it["query"]["bool"]["must"][0]["bool"]["should"])
+    with_count = len(_innermost_query(with_it["query"])["bool"]["must"][0]["bool"]["should"])
+    without_count = len(_innermost_query(without_it["query"])["bool"]["must"][0]["bool"]["should"])
     assert without_count == 1  # exact_asin only
     assert with_count == without_count + len(app.CONFIG.field_relevance.fields) + 1
 
@@ -176,7 +195,7 @@ def test_token_translation_only_query_does_not_crash_and_uses_field_relevance_fi
 
     payload = app.build_search_query("kablosuz", apply_intent_reranking=False)
 
-    should = payload["query"]["bool"]["must"][0]["bool"]["should"]
+    should = _innermost_query(payload["query"])["bool"]["must"][0]["bool"]["should"]
     token_translation_clauses = [
         c["multi_match"] for c in should
         if c.get("multi_match", {}).get("query") == "wireless"
@@ -199,7 +218,7 @@ def test_field_relevance_debug_names_present_only_when_requested():
     with_debug = app.build_search_query("kamera", apply_intent_reranking=False, include_relevance_debug=True)
 
     def _has_any_name(payload):
-        should = payload["query"]["bool"]["must"][0]["bool"]["should"]
+        should = _innermost_query(payload["query"])["bool"]["must"][0]["bool"]["should"]
         return any("_name" in c.get("match", {}).get(f, {}) for c in should for f in c.get("match", {}))
 
     assert not _has_any_name(without_debug)
@@ -296,7 +315,7 @@ def test_object_negative_category_uses_boosting_not_must_not():
     query = payload["query"]
     assert "boosting" in query
     assert query["boosting"]["negative_boost"] >= search_service.CONFIG.intent_ranking.negative_penalty_floor
-    assert "must_not" not in query["boosting"]["positive"].get("bool", {})
+    assert "must_not" not in _innermost_query(query["boosting"]["positive"]).get("bool", {})
 
 
 def test_legacy_hard_exclusion_still_uses_must_not():
@@ -309,7 +328,7 @@ def test_legacy_hard_exclusion_still_uses_must_not():
     )
     payload = search_service.build_search_query("smartwatch", intent_signals=signals)
     assert "boosting" not in payload["query"]
-    assert payload["query"]["bool"]["must_not"]
+    assert _innermost_query(payload["query"])["bool"]["must_not"]
 
 
 def test_manual_positive_category_renders_categories_text_and_tr():
@@ -321,7 +340,7 @@ def test_manual_positive_category_renders_categories_text_and_tr():
         matched_rule_ids=("iphone_case",),
     )
     payload = search_service.build_search_query("iphone case", intent_signals=signals)
-    should = payload["query"]["bool"]["should"]
+    should = _innermost_query(payload["query"])["bool"]["should"]
     fields_hit = {list(c["match_phrase"].keys())[0] for c in should if "match_phrase" in c}
     assert {"categories_text", "categories_text.tr"} <= fields_hit
 
@@ -344,7 +363,7 @@ def test_legacy_manual_positive_category_renders_distinct_text_and_tr_boosts():
         matched_rule_ids=("watch",),
     )
     payload = search_service.build_search_query("smartwatch", intent_signals=signals)
-    should = payload["query"]["bool"]["should"]
+    should = _innermost_query(payload["query"])["bool"]["should"]
     boosts = {
         list(c["match_phrase"].keys())[0]: list(c["match_phrase"].values())[0]["boost"]
         for c in should
@@ -362,14 +381,13 @@ def test_dynamic_positive_category_renders_term_on_its_own_field():
         positive_categories=({"value": "Computers", "boost": 2.0, "source": "dynamic", "field": "main_category"},),
     )
     payload = search_service.build_search_query("laptop", intent_signals=signals)
-    should = payload["query"]["bool"]["should"]
+    should = _innermost_query(payload["query"])["bool"]["should"]
     assert any(c.get("term", {}).get("main_category", {}).get("value") == "Computers" for c in should)
 
 
 def test_title_ranking_adds_exact_and_prefix_tiers():
     payload = app.build_search_query("wireless mouse")
-    should = payload["query"]["boosting"]["positive"]["bool"]["must"][0]["bool"]["should"] \
-        if "boosting" in payload["query"] else payload["query"]["bool"]["must"][0]["bool"]["should"]
+    should = _innermost_query(payload["query"])["bool"]["must"][0]["bool"]["should"]
     exact_field = app.CONFIG.title_ranking.exact_field
     assert any(c.get("term", {}).get(exact_field, {}).get("boost") == app.CONFIG.title_ranking.exact_boost for c in should)
     assert any(
@@ -382,7 +400,7 @@ def test_title_ranking_adds_exact_and_prefix_tiers():
 
 def test_title_ranking_tiers_present_even_when_phrase_search_disabled():
     payload = app.build_search_query("wireless mouse", enable_phrase=False)
-    should = payload["query"]["bool"]["must"][0]["bool"]["should"]
+    should = _innermost_query(payload["query"])["bool"]["must"][0]["bool"]["should"]
     exact_field = app.CONFIG.title_ranking.exact_field
     assert any(exact_field in c.get("term", {}) for c in should)
     assert any("match_phrase_prefix" in c for c in should)
@@ -395,8 +413,72 @@ def test_title_ranking_disabled_omits_new_tiers(monkeypatch):
 
     disabled_cfg = replace(search_service.CONFIG, title_ranking=replace(search_service.CONFIG.title_ranking, enabled=False))
     payload = search_service.build_search_query("wireless mouse", config=disabled_cfg)
-    should = payload["query"]["bool"]["must"][0]["bool"]["should"] if "bool" in payload["query"] else \
-        payload["query"]["boosting"]["positive"]["bool"]["must"][0]["bool"]["should"]
+    should = _innermost_query(payload["query"])["bool"]["must"][0]["bool"]["should"]
     exact_field = search_service.CONFIG.title_ranking.exact_field
     assert not any(exact_field in c.get("term", {}) for c in should)
     assert not any("match_phrase_prefix" in c for c in should)
+
+
+def _find_function_score_by_name_prefix(query_node, name_prefix):
+    """Test helper: walks a query dict looking for a function_score whose
+    first function's filter carries a `_name` starting with `name_prefix`.
+    Returns the function_score dict or None."""
+    if not isinstance(query_node, dict):
+        return None
+    if "function_score" in query_node:
+        fs = query_node["function_score"]
+        for fn in fs.get("functions", []):
+            name = fn.get("filter", {}).get("bool", {}).get("_name", "")
+            if name.startswith(name_prefix):
+                return fs
+        found = _find_function_score_by_name_prefix(fs.get("query"), name_prefix)
+        if found:
+            return found
+    for key in ("bool", "boosting"):
+        if key in query_node:
+            inner = query_node[key]
+            if isinstance(inner, dict):
+                for sub_key in ("query", "positive"):
+                    if sub_key in inner:
+                        found = _find_function_score_by_name_prefix(inner[sub_key], name_prefix)
+                        if found:
+                            return found
+    return None
+
+
+def test_field_consensus_wraps_query_in_function_score():
+    payload = app.build_search_query("kamera", include_relevance_debug=True)
+    fs = _find_function_score_by_name_prefix(payload["query"], "consensus:")
+    assert fs is not None
+    assert fs["score_mode"] == "max"
+    assert fs["boost_mode"] == "multiply"
+    assert len(fs["functions"]) == 3
+
+
+def test_field_consensus_filters_never_use_exists():
+    payload = app.build_search_query("kamera", include_relevance_debug=True)
+    raw = json.dumps(payload)
+    fs = _find_function_score_by_name_prefix(payload["query"], "consensus:")
+    assert "exists" not in json.dumps(fs)
+
+
+def test_field_consensus_tier_weights_come_from_config():
+    payload = app.build_search_query("kamera", include_relevance_debug=True)
+    fs = _find_function_score_by_name_prefix(payload["query"], "consensus:")
+    weights = sorted(fn["weight"] for fn in fs["functions"])
+    fc = app.CONFIG.field_consensus
+    assert weights == sorted([fc.two_field_boost, fc.three_field_boost, fc.four_plus_field_boost])
+
+
+def test_field_consensus_disabled_removes_wrapper(tmp_path_factory):
+    import services.search_service as search_service
+    from config import load_search_config
+
+    data = _repo_search_config_dict()
+    data["field_consensus"]["enabled"] = False
+    override_path = _tmp_path_config(tmp_path_factory, data)
+    override_config = load_search_config(override_path)
+
+    payload = search_service.build_search_query("kamera", config=override_config, include_relevance_debug=True)
+    assert _find_function_score_by_name_prefix(payload["query"], "consensus:") is None
+    clear_config_cache()
