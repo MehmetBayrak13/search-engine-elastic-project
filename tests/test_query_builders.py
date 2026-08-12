@@ -123,6 +123,38 @@ def test_fuzzy_switch_can_be_disabled():
     assert without_count == with_count - 1
 
 
+def test_fuzzy_multi_match_uses_configured_and_operator():
+    # Operatörsüz multi_match ES'te varsayılan "or" olur: sorgunun tek bir
+    # kelimesi (ör. "wireless") herhangi bir alanda tek başına eşleşse bile
+    # zorunlu lexical kapıyı geçirir ve tamamen alakasız kategorilerden ürün
+    # sızdırır (bkz. CLAUDE.md relevance notları — "wireless headphones"
+    # sorgusunda Automotive/Arts&Crafts ürünlerinin çıkması). "and" operatörü
+    # tüm sorgu kelimelerinin (fuzzy toleransıyla) aynı alanda geçmesini
+    # zorunlu kılar.
+    payload = app.build_search_query("kamera", apply_intent_reranking=False)
+    should = _innermost_query(payload["query"])["bool"]["must"][0]["bool"]["should"]
+    fuzzy_clauses = [
+        c["multi_match"] for c in should
+        if c.get("multi_match", {}).get("type") == app.CONFIG.search_methods.fuzzy.type
+        and "fuzziness" in c.get("multi_match", {})
+    ]
+    assert len(fuzzy_clauses) == 1
+    assert fuzzy_clauses[0]["operator"] == app.CONFIG.search_methods.fuzzy.operator == "and"
+
+
+def test_token_translation_multi_match_uses_and_operator():
+    # Aynı sınıf hata: çeviri token multi_match'i de operatörsüzse "or"
+    # olur ve tek bir çevrilmiş kelime tek başına kapıyı geçirebilir.
+    payload = app.build_search_query("kablosuz", apply_intent_reranking=False)
+    should = _innermost_query(payload["query"])["bool"]["must"][0]["bool"]["should"]
+    token_translation_clauses = [
+        c["multi_match"] for c in should
+        if c.get("multi_match", {}).get("query") == "wireless"
+    ]
+    assert len(token_translation_clauses) == 1
+    assert token_translation_clauses[0]["operator"] == app.CONFIG.field_relevance.operator == "and"
+
+
 def test_field_relevance_produces_one_match_clause_per_configured_field():
     payload = app.build_search_query(
         "kamera",
@@ -316,6 +348,11 @@ def test_object_negative_category_uses_boosting_not_must_not():
     )
     payload = search_service.build_search_query("iphone case", intent_signals=signals)
     query = payload["query"]
+    # popularity_ranking (varsayılan AÇIK) `boosting` düğümünü kendi
+    # `function_score`'u içine sarmalar; bu test yalnızca `boosting`in
+    # var olduğunu ve içeriğini doğruluyor, o dış katmanı atlıyoruz.
+    if "function_score" in query:
+        query = query["function_score"]["query"]
     assert "boosting" in query
     assert query["boosting"]["negative_boost"] >= search_service.CONFIG.intent_ranking.negative_penalty_floor
     assert "must_not" not in _innermost_query(query["boosting"]["positive"]).get("bool", {})

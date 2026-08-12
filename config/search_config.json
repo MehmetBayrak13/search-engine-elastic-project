@@ -25,6 +25,7 @@
     "phrase": { "field": "title", "boost": 10 },
     "fuzzy": {
       "type": "best_fields",
+      "operator": "and",
       "fuzziness": "AUTO",
       "prefix_length": 2,
       "max_expansions": 30,
@@ -70,7 +71,8 @@
       "categories",
       "main_category",
       "source_category"
-    ]
+    ],
+    "negative_category_penalty": 0.5
   },
   "quality_ranking": {
     "enabled": false,
@@ -84,6 +86,12 @@
     "missing_value_behavior": "neutral",
     "discovery_filter_enabled": false,
     "discovery_min_data_quality_score": 0.3
+  },
+  "popularity_ranking": {
+    "enabled": true,
+    "field": "rating_number",
+    "factor": 0.03,
+    "baseline": 1.0
   },
   "title_ranking": {
     "enabled": true,

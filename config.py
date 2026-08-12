@@ -203,6 +203,12 @@ class DynamicIntentConfig:
     timeout_seconds: int
     search_fields: tuple[FieldBoost, ...]
     aggregation_fields: tuple[str, ...]
+    # `main_category` aggregation'ının bulduğu TOP `max_category_candidates`
+    # değerinin DIŞINDA kalan belgelere uygulanan çarpımsal penaltı (bkz.
+    # `_apply_dynamic_category_penalty`). 1.0 = no-op; "main_category"
+    # `aggregation_fields`te yoksa ya da keşif hiç aday üretmezse (fail-safe)
+    # bu alan hiç etkisiz kalır — asla tek başına belge dışlamaz.
+    negative_category_penalty: float
 
     @property
     def es_search_fields(self) -> list[str]:
@@ -233,6 +239,26 @@ class QualityRankingConfig:
     missing_value_behavior: str
     discovery_filter_enabled: bool
     discovery_min_data_quality_score: float
+
+
+@dataclass(frozen=True)
+class PopularityRankingConfig:
+    """`rating_number`e dayalı çarpımsal bir popülerlik/güven sinyali.
+    `quality_ranking`in aksine yeni bir alan gerektirmez — `rating_number`
+    zaten production index'te mevcut (bkz. CLAUDE.md relevance notları:
+    BM25, kısa/nadir alanlı ama neredeyse hiç değerlendirilmemiş ürünleri
+    şaşırtıcı derecede yüksek skorlayabiliyor). Çarpan = `baseline +
+    ln(1 + factor*rating_number)`; `rating_number=0`da çarpan TAM
+    `baseline`e eşittir (asla sıfırlamaz — additif `weight` fonksiyonu
+    sayesinde), popüler ürünlerde ise log-ölçekli büyür. Gerçek cluster'da
+    ölçüldü: additif (sum) bir tasarım 500-1300 aralığındaki lexical
+    skorlar karşısında görünmez kalıyordu; çarpımsal tasarım anlamlı sıra
+    değişikliği üretiyor (bkz. `_apply_popularity_ranking`)."""
+
+    enabled: bool
+    field: str
+    factor: float
+    baseline: float
 
 
 @dataclass(frozen=True)
@@ -434,6 +460,7 @@ class AppConfig:
     translation: TranslationConfig
     dynamic_intent: DynamicIntentConfig
     quality_ranking: QualityRankingConfig
+    popularity_ranking: PopularityRankingConfig
     title_ranking: TitleRankingConfig
     intent_ranking: IntentRankingConfig
     field_relevance: FieldRelevanceConfig
@@ -513,6 +540,9 @@ def _build_dynamic_intent(raw: Any, context: str) -> DynamicIntentConfig:
         timeout_seconds=_require_positive_int(raw.get("timeout_seconds"), f"{context}.timeout_seconds"),
         search_fields=_build_field_boosts(raw.get("search_fields"), f"{context}.search_fields"),
         aggregation_fields=aggregation_fields,
+        negative_category_penalty=_require_positive_number(
+            raw.get("negative_category_penalty"), f"{context}.negative_category_penalty", allow_zero=True
+        ),
     )
 
 
@@ -631,6 +661,16 @@ def _build_quality_ranking(raw: Any, context: str) -> QualityRankingConfig:
     )
 
 
+def _build_popularity_ranking(raw: Any, context: str) -> PopularityRankingConfig:
+    raw = _require_dict(raw, context)
+    return PopularityRankingConfig(
+        enabled=_require_bool(raw.get("enabled"), f"{context}.enabled"),
+        field=_require_str(raw.get("field"), f"{context}.field"),
+        factor=_require_positive_number(raw.get("factor"), f"{context}.factor"),
+        baseline=_require_positive_number(raw.get("baseline"), f"{context}.baseline"),
+    )
+
+
 def _build_pagination(raw: Any, context: str) -> PaginationConfig:
     raw = _require_dict(raw, context)
     page_size = _require_positive_int(raw.get("page_size"), f"{context}.page_size")
@@ -701,6 +741,7 @@ def _build_fuzzy(raw: Any, context: str) -> MultiFieldQueryConfig:
         type=_require_str(raw.get("type"), f"{context}.type"),
         boost=_require_positive_number(raw.get("boost"), f"{context}.boost"),
         fields=_build_field_boosts(raw.get("fields"), f"{context}.fields"),
+        operator=_require_str(raw.get("operator"), f"{context}.operator"),
         fuzziness=_require_str(raw.get("fuzziness"), f"{context}.fuzziness"),
         prefix_length=_require_positive_int(raw.get("prefix_length"), f"{context}.prefix_length"),
         max_expansions=_require_positive_int(raw.get("max_expansions"), f"{context}.max_expansions"),
@@ -806,6 +847,7 @@ def load_search_config(path: Path = SEARCH_CONFIG_PATH) -> AppConfig:
 
     dynamic_intent = _build_dynamic_intent(raw.get("dynamic_intent"), "dynamic_intent")
     quality_ranking = _build_quality_ranking(raw.get("quality_ranking"), "quality_ranking")
+    popularity_ranking = _build_popularity_ranking(raw.get("popularity_ranking"), "popularity_ranking")
     title_ranking = _build_title_ranking(raw.get("title_ranking"), "title_ranking")
     intent_ranking = _build_intent_ranking(raw.get("intent_ranking"), "intent_ranking")
     field_relevance = _build_field_relevance(raw.get("field_relevance"), "field_relevance")
@@ -848,6 +890,7 @@ def load_search_config(path: Path = SEARCH_CONFIG_PATH) -> AppConfig:
         translation=translation,
         dynamic_intent=dynamic_intent,
         quality_ranking=quality_ranking,
+        popularity_ranking=popularity_ranking,
         title_ranking=title_ranking,
         intent_ranking=intent_ranking,
         field_relevance=field_relevance,

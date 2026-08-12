@@ -375,13 +375,14 @@ def test_dynamic_category_discovery_preserved_with_pagination(monkeypatch):
 
 def test_quality_ranking_stays_disabled_by_default_with_pagination():
     assert app.search_service.CONFIG.quality_ranking.enabled is False
-    # field_consensus (Task 3) adds its own independent `function_score`
-    # wrapper (default-enabled); disable it here so this assertion stays
-    # scoped to quality_ranking's own wrapper, not a false positive/negative
-    # from an unrelated feature's function_score.
+    # field_consensus (Task 3) ve popularity_ranking (varsayılan AÇIK) kendi
+    # bağımsız `function_score` sarmalayıcılarını ekliyor; bu doğrulama
+    # yalnızca quality_ranking'in kendi wrapper'ına odaklı kalsın diye
+    # ikisi de burada devre dışı bırakılıyor.
     no_consensus_cfg = dataclasses.replace(
         app.search_service.CONFIG,
         field_consensus=dataclasses.replace(app.search_service.CONFIG.field_consensus, enabled=False),
+        popularity_ranking=dataclasses.replace(app.search_service.CONFIG.popularity_ranking, enabled=False),
     )
     payload = app.build_search_query("kamera", page=2, apply_intent_reranking=False, config=no_consensus_cfg)
     assert "function_score" not in payload["query"]
@@ -393,7 +394,15 @@ def test_discovery_filter_stays_disabled_by_default_with_pagination():
 
 def test_exact_asin_quality_bypass_preserved_with_pagination():
     quality = dataclasses.replace(app.search_service.CONFIG.quality_ranking, enabled=True, bypass_for_exact_asin=True)
-    app.search_service.CONFIG = dataclasses.replace(app.search_service.CONFIG, quality_ranking=quality)
+    app.search_service.CONFIG = dataclasses.replace(
+        app.search_service.CONFIG,
+        quality_ranking=quality,
+        # popularity_ranking (varsayılan AÇIK) quality_ranking'in etrafına
+        # kendi function_score'unu ekleyip "en dıştaki wrapper" varsayımını
+        # bozar; bu test yalnızca quality_ranking'in bypass davranışına
+        # odaklı olsun diye burada devre dışı bırakılıyor.
+        popularity_ranking=dataclasses.replace(app.search_service.CONFIG.popularity_ranking, enabled=False),
+    )
     payload = app.build_search_query(
         "B000123456", page=1, enable_exact_asin=True, apply_intent_reranking=False
     )

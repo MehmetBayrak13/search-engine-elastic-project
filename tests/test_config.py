@@ -39,6 +39,7 @@ def _minimal_search_config(**overrides):
             "phrase": {"field": "title", "boost": 10},
             "fuzzy": {
                 "type": "best_fields",
+                "operator": "and",
                 "fuzziness": "AUTO",
                 "prefix_length": 2,
                 "max_expansions": 30,
@@ -69,6 +70,7 @@ def _minimal_search_config(**overrides):
             "timeout_seconds": 5,
             "search_fields": {"title": 4, "categories_text": 6},
             "aggregation_fields": ["categories", "main_category"],
+            "negative_category_penalty": 0.5,
         },
         "quality_ranking": {
             "enabled": False,
@@ -82,6 +84,12 @@ def _minimal_search_config(**overrides):
             "missing_value_behavior": "neutral",
             "discovery_filter_enabled": False,
             "discovery_min_data_quality_score": 0.3,
+        },
+        "popularity_ranking": {
+            "enabled": True,
+            "field": "rating_number",
+            "factor": 0.03,
+            "baseline": 1.0,
         },
         "pagination": {
             "enabled": True,
@@ -239,6 +247,27 @@ def test_dynamic_intent_search_fields_come_from_config():
     assert all("^" in field for field in app_config.dynamic_intent.es_search_fields)
 
 
+def test_negative_category_penalty_negative_value_is_rejected(tmp_path):
+    data = _minimal_search_config()
+    data["dynamic_intent"]["negative_category_penalty"] = -0.5
+    path = _write_json(tmp_path / "search_config.json", data)
+    with pytest.raises(ConfigError):
+        load_search_config(path)
+
+
+def test_negative_category_penalty_zero_is_allowed(tmp_path):
+    data = _minimal_search_config()
+    data["dynamic_intent"]["negative_category_penalty"] = 0
+    path = _write_json(tmp_path / "search_config.json", data)
+    app_config = load_search_config(path)
+    assert app_config.dynamic_intent.negative_category_penalty == 0
+
+
+def test_negative_category_penalty_loads_from_default_repo_config():
+    app_config = load_search_config()
+    assert 0 <= app_config.dynamic_intent.negative_category_penalty < 1
+
+
 def test_quality_ranking_invalid_missing_value_behavior_is_rejected(tmp_path):
     data = _minimal_search_config()
     data["quality_ranking"]["missing_value_behavior"] = "bogus"
@@ -277,6 +306,37 @@ def test_app_config_has_quality_ranking_field():
     assert hasattr(app_config, "quality_ranking")
     assert app_config.quality_ranking.enabled is False
     assert app_config.quality_ranking.discovery_filter_enabled is False
+
+
+def test_popularity_ranking_loads_from_default_repo_config():
+    app_config = load_search_config()
+    assert app_config.popularity_ranking.enabled is True
+    assert app_config.popularity_ranking.field == "rating_number"
+    assert app_config.popularity_ranking.factor > 0
+
+
+def test_popularity_ranking_missing_section_is_rejected(tmp_path):
+    data = _minimal_search_config()
+    del data["popularity_ranking"]
+    path = _write_json(tmp_path / "search_config.json", data)
+    with pytest.raises(ConfigError):
+        load_search_config(path)
+
+
+def test_popularity_ranking_negative_factor_is_rejected(tmp_path):
+    data = _minimal_search_config()
+    data["popularity_ranking"]["factor"] = -1
+    path = _write_json(tmp_path / "search_config.json", data)
+    with pytest.raises(ConfigError):
+        load_search_config(path)
+
+
+def test_popularity_ranking_negative_baseline_is_rejected(tmp_path):
+    data = _minimal_search_config()
+    data["popularity_ranking"]["baseline"] = -1
+    path = _write_json(tmp_path / "search_config.json", data)
+    with pytest.raises(ConfigError):
+        load_search_config(path)
 
 
 def test_pagination_loads_from_default_repo_config():

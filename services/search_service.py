@@ -198,6 +198,11 @@ def _build_translation_lexical_queries(query_text: str) -> list[dict]:
             "multi_match": {
                 "query": " ".join(expansion["token_translations"]),
                 "type": "best_fields",
+                # operator eksikse ES varsayılanı "or" olur — tek bir çeviri
+                # token'ının (ör. yalnızca "wireless") herhangi bir alanda tek
+                # başına eşleşmesi zorunlu lexical kapıyı geçirir (bkz. fuzzy
+                # multi_match'teki aynı sınıf hata, search_service.py D bloğu).
+                "operator": CONFIG.field_relevance.operator,
                 "boost": CONFIG.translation.token_boost,
                 # `search_methods.multi_match` kaldırıldı (bkz. Task 1) — alan
                 # listesi artık aynı amaca hizmet eden `field_relevance`'tan
@@ -246,6 +251,14 @@ def build_category_discovery_query(
             "multi_match": {
                 "query": text,
                 "type": "best_fields",
+                # operator eksikse ES varsayılanı "or" olur -- çok kelimeli
+                # bir sorgunun (ör. "wireless headphones") TEK bir kelimesi
+                # (ör. yalnızca "wireless") herhangi bir alanda geçen HER
+                # ürünü aggregation örneklemine dahil eder ve kategori
+                # keşfini kirletir (bkz. fuzzy/çeviri multi_match'lerindeki
+                # aynı sınıf hata, search_service.py D bloğu ve
+                # _build_translation_lexical_queries).
+                "operator": cfg.field_relevance.operator,
                 "fields": dyn.es_search_fields,
             }
         }
@@ -494,6 +507,40 @@ def _apply_quality_ranking(base_query: dict, *, query_text: str, enable_exact_as
             "query": base_query,
             "functions": functions,
             "score_mode": "multiply",
+            "boost_mode": "multiply",
+        }
+    }
+
+
+def _apply_popularity_ranking(base_query: dict, cfg: "AppConfig") -> dict:
+    """`rating_number`e dayalı çarpımsal bir popülerlik/güven sinyali bindirir
+    (bkz. `PopularityRankingConfig` docstring'i — çarpan = `baseline +
+    ln(1 + factor*rating_number)`). İki fonksiyon `score_mode: sum` ile
+    toplanıp `boost_mode: multiply` ile orijinal lexical skorla çarpılır:
+    `weight: baseline` HER belgede (filtre yok) koşulsuz uygulanır, bu
+    yüzden `rating_number=0`/alan eksik (`missing: 0`) olsa bile toplam
+    çarpan asla `baseline`in altına inmez — `field_value_factor` tek
+    başına kullanılsaydı `log1p(0)=0` çarpanı bu belgelerin skorunu
+    tamamen sıfırlardı (bkz. `_build_quality_functions`'taki aynı
+    'missing_value_behavior: neutral' deseni)."""
+    pr = cfg.popularity_ranking
+    if not pr.enabled:
+        return base_query
+    return {
+        "function_score": {
+            "query": base_query,
+            "functions": [
+                {"weight": pr.baseline},
+                {
+                    "field_value_factor": {
+                        "field": pr.field,
+                        "factor": pr.factor,
+                        "modifier": "log1p",
+                        "missing": 0,
+                    }
+                },
+            ],
+            "score_mode": "sum",
             "boost_mode": "multiply",
         }
     }
@@ -770,6 +817,56 @@ def _apply_relevance_contradiction(
     }
 
 
+def _apply_dynamic_category_penalty(
+    base_query: dict, discovered_categories: list[dict], cfg: "AppConfig"
+) -> dict:
+    """`discover_category_intent`'in bu sorgu için bulduğu TOP `main_category`
+    adaylarının (baskın kategoriler) DIŞINDA kalan belgelere hafif bir
+    çarpımsal penaltı uygular. Amaç: lexical olarak eşleşen ama kategorisi
+    sorguyla tamamen alakasız ürünlerin (ör. "wireless headphones" aramasında
+    Automotive/Arts&Crafts kategorili, tek kelimesi rastgele eşleşen ürünler
+    — bkz. CLAUDE.md relevance notları) BM25'in kısa-alan/nadir-terim
+    şişirmesinden aldığı avantajı dengelemek.
+
+    `discovered_categories`, `resolve_intent_signals`'ın zaten hesapladığı
+    (`IntentSignals.debug["dynamic_discovery"]`) TEK aggregation isteğinin
+    çıktısıdır — bunun için EKSTRA bir Elasticsearch isteği YAPILMAZ.
+
+    `main_category` `aggregation_fields`te değilse ya da keşif hiç aday
+    üretmemişse (fail-safe: kapalı, min. sorgu uzunluğu altı, timeout,
+    bağlantı hatası) `top_main_categories` boş kalır ve bu fonksiyon
+    no-op'tur — kategori keşfi ASLA normal aramayı tek başına bozamaz
+    (bkz. CLAUDE.md §16). `weight: 1.0` filtresiz fonksiyon, penaltı
+    filtresi eşleşmeyen (yani TOP kategoride olan) belgeler için çarpanın
+    tam olarak 1.0 (nötr) kalmasını garanti eder — `_build_quality_functions`
+    ile aynı 'filtresiz taban + filtreli penaltı, score_mode: multiply'
+    deseni."""
+    dyn = cfg.dynamic_intent
+    if not dyn.enabled or dyn.negative_category_penalty >= 1.0:
+        return base_query
+
+    top_main_categories = sorted({
+        str(candidate["value"])
+        for candidate in discovered_categories
+        if candidate.get("field") == "main_category" and candidate.get("value")
+    })
+    if not top_main_categories:
+        return base_query
+
+    penalty_filter = {"bool": {"must_not": [{"terms": {"main_category": top_main_categories}}]}}
+    return {
+        "function_score": {
+            "query": base_query,
+            "functions": [
+                {"weight": 1.0},
+                {"filter": penalty_filter, "weight": dyn.negative_category_penalty},
+            ],
+            "score_mode": "multiply",
+            "boost_mode": "multiply",
+        }
+    }
+
+
 def relevance_debug_from_matched_queries(matched_queries: list[str] | None, cfg: "AppConfig") -> dict:
     """ES'in native `_name`/`matched_queries` mekanizmasından (bkz.
     build_search_query(include_relevance_debug=True), spec §8 — canlı
@@ -923,6 +1020,7 @@ def build_search_query(
             "multi_match": {
                 "query": query_text,
                 "type": methods.fuzzy.type,
+                "operator": methods.fuzzy.operator,
                 "fuzziness": methods.fuzzy.fuzziness,
                 "prefix_length": methods.fuzzy.prefix_length,
                 "max_expansions": methods.fuzzy.max_expansions,
@@ -1019,6 +1117,10 @@ def build_search_query(
         base_query, intent_signals.contradiction_terms, cfg, debug_names=include_relevance_debug
     )
 
+    base_query = _apply_dynamic_category_penalty(
+        base_query, list(intent_signals.debug.get("dynamic_discovery", [])), cfg
+    )
+
     negative_clause, negative_boost = _soft_negative_boosting_negative_clause(
         intent_signals.negative_categories
     )
@@ -1034,6 +1136,7 @@ def build_search_query(
     final_query = _apply_quality_ranking(
         base_query, query_text=query_text, enable_exact_asin=enable_exact_asin
     )
+    final_query = _apply_popularity_ranking(final_query, cfg)
 
     payload = {
         "size": size,
