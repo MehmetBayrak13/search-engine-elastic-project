@@ -1,18 +1,25 @@
 :root {
-  /* Brand palette */
-  --bg: #f1ece1; /* RAL 9010 (Pure White) — not pure white */
+  /* Brand palette — Amazon-inspired: navy chrome, burnt-orange accent,
+     price red, warm-gray canvas behind white cards. `--primary` (navy) and
+     `--accent` (orange) are BOTH used as solid button fills with white text
+     elsewhere (.search-button, .chip-on, .pagination-buttons button:active
+     — see App.css); values below are chosen to clear WCAG AA (4.5:1) for
+     white text specifically, unlike Amazon's own #FF9900/#FFD814 which only
+     work with black text — don't swap these for a brighter/lighter orange
+     without re-checking that contrast. */
+  --bg: #eaeded; /* Amazon's light warm-gray canvas behind white product cards */
   --surface: #ffffff;
-  --primary: #2563eb;
-  --primary-hover: #1d4ed8;
-  --primary-soft: #dbeafe;
-  --secondary: #60a5fa;
-  --accent: #14b8a6;
-  --accent-hover: #0d9488;
-  --accent-soft: #ccfbf1;
-  --border: #dbeafe;
-  --border-strong: #bfdbfe;
-  --text: #0f172a;
-  --text-muted: #64748b;
+  --primary: #232f3e; /* Amazon header navy */
+  --primary-hover: #131921; /* Amazon's darkest navy */
+  --primary-soft: #e7eaed;
+  --secondary: #37475a; /* Amazon secondary navy strip */
+  --accent: #c7511f; /* Amazon burnt-orange (contrast-safe with white text) */
+  --accent-hover: #a03d13;
+  --accent-soft: #fdf1ea;
+  --border: #d5d9d9; /* Amazon border gray */
+  --border-strong: #8f9494;
+  --text: #0f1111; /* Amazon near-black body text */
+  --text-muted: #565959; /* Amazon secondary gray text */
 
   /* Derived surface roles (kept as separate tokens so components can stay
      specific without re-deriving colors ad hoc) */
@@ -21,25 +28,25 @@
   --card-bg: var(--surface);
   --sidebar-bg: var(--surface);
   --input-bg: var(--surface);
-  --hover-bg: #eff6ff;
+  --hover-bg: #f7f8f8;
   --chip-bg: var(--surface);
   --chip-fg: var(--text-muted);
-  --success-bg: var(--accent-soft);
-  --success-fg: #0f766e;
-  --success-border: #99f6e4;
-  --warning-bg: #fffbeb;
-  --warning-fg: #92400e;
-  --error-bg: #fef2f2;
-  --error-fg: #b91c1c;
-  --info-bg: var(--primary-soft);
-  --info-fg: #1e40af;
-  --price-fg: #0d9488;
-  --shadow: 0 8px 24px rgba(37, 99, 235, 0.1);
-  --shadow-hover: 0 10px 22px rgba(20, 184, 166, 0.16);
+  --success-bg: #e5f4e8;
+  --success-fg: #007600; /* Amazon "in stock" green */
+  --success-border: #b7e1c0;
+  --warning-bg: #fff8e6;
+  --warning-fg: #8a5a00;
+  --error-bg: #fdece9;
+  --error-fg: #cc0c39; /* Amazon deal-badge red */
+  --info-bg: #eaf4f6;
+  --info-fg: #007185; /* Amazon link teal */
+  --price-fg: #b12704; /* Amazon price red-orange */
+  --shadow: 0 8px 24px rgba(15, 17, 17, 0.08);
+  --shadow-hover: 0 10px 22px rgba(199, 81, 31, 0.18);
 
   /* Palette is intentionally fixed (no @media (prefers-color-scheme: dark)
-     override) so the RAL 9010 background renders the same for every user,
-     regardless of their OS/browser dark-mode setting. */
+     override) so it renders the same for every user, regardless of their
+     OS/browser dark-mode setting. */
   color-scheme: light;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
 }
