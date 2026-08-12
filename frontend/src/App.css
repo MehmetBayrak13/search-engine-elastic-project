@@ -299,21 +299,24 @@
   align-items: start;
   transition: grid-template-columns 200ms ease;
 }
-/* Sidebar kapatıldığında sütun tamamen kaldırılır — aksi halde grid track
-   280px olarak sabit kalır, `.sidebar-shell`in max-width:0'a küçülmesi ürün
-   grid'ini genişletmez, ürünler sağa yakın/dar bir sütunda sıkışık kalır. */
+/* Sidebar kapatıldığında main-column tam genişliği kullansın diye grid tek
+   sütuna düşer. Bu YALNIZCA `.sidebar-shell.is-collapsed`in `display:none`
+   ile grid'den TAMAMEN çıkarılmasıyla güvenlidir — aksi halde (yalnızca
+   max-width:0/overflow:hidden ile "görünmez" bırakılsaydı) grid, satır
+   yüksekliğini hesaplarken collapsed sidebar'ın İÇERİĞİNİN doğal (clip
+   edilmemiş) yüksekliğini hâlâ hesaba katar (`align-items:start` bunu
+   önlemez) — bu da main-column'ın altında devasa, görünmez bir boşluk
+   bırakır ve results-bar'daki "Ayarları göster" butonu o boşluğun içinde
+   görünmez hâle gelirdi (canlıda gözlemlendi, kök neden `getBoundingClientRect`
+   ile doğrulandı: collapsed sidebar width:0 ama height:1503px ölçüldü). */
 .layout.sidebar-hidden {
   grid-template-columns: 1fr;
 }
 .sidebar-shell {
-  overflow: hidden;
-  opacity: 1;
   min-width: 0;
-  transition: max-width 200ms ease, opacity 180ms ease;
 }
 .sidebar-shell.is-collapsed {
-  max-width: 0;
-  opacity: 0;
+  display: none;
 }
 @media (max-width: 900px) {
   .layout {
