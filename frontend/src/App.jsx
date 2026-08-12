@@ -1,13 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 import { ApiError, getAutocomplete, getConfig, getHealth, searchProducts } from './api/client';
+import Topbar from './components/Topbar';
 import Hero from './components/Hero';
 import SidebarSettings from './components/SidebarSettings';
 import SearchBox from './components/SearchBox';
 import FeatureChips from './components/FeatureChips';
 import EmptyState from './components/EmptyState';
+import ZeroResults from './components/ZeroResults';
 import ResultHeader from './components/ResultHeader';
 import ProductCard from './components/ProductCard';
+import SkeletonGrid from './components/SkeletonGrid';
 import Pagination from './components/Pagination';
+import Footer from './components/Footer';
 import { formatMessage } from './lib/format';
 import './App.css';
 
@@ -22,6 +26,32 @@ function flagsSignature(flags) {
   return JSON.stringify(Object.entries(flags).sort());
 }
 
+/**
+ * Sıralama YALNIZCA o an ekrandaki (mevcut sayfadaki) sonuçları yeniden
+ * sıralar — sunucudan tekrar veri çekmez. Fiyatı/puanı olmayan ürünler
+ * sıralama yönünden bağımsız olarak her zaman en sona düşer.
+ */
+function sortHits(hits, mode) {
+  if (mode === 'relevance') return hits;
+  const withValue = (getValue) => {
+    const decorated = hits.map((hit, index) => ({ hit, index, value: getValue(hit) }));
+    decorated.sort((a, b) => {
+      if (a.value == null && b.value == null) return a.index - b.index;
+      if (a.value == null) return 1;
+      if (b.value == null) return -1;
+      return mode === 'price-desc' || mode === 'rating' ? b.value - a.value : a.value - b.value;
+    });
+    return decorated.map((d) => d.hit);
+  };
+  if (mode === 'price-asc' || mode === 'price-desc') {
+    return withValue((hit) => (hit.price != null && !Number.isNaN(Number(hit.price)) ? Number(hit.price) : null));
+  }
+  if (mode === 'rating') {
+    return withValue((hit) => (hit.average_rating != null ? Number(hit.average_rating) : null));
+  }
+  return hits;
+}
+
 export default function App() {
   const [config, setConfig] = useState(null);
   const [configError, setConfigError] = useState(null);
@@ -30,6 +60,8 @@ export default function App() {
   const [liveSuggestions, setLiveSuggestions] = useState(true);
   const [esOk, setEsOk] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sortMode, setSortMode] = useState('relevance');
+  const [lastLatencyMs, setLastLatencyMs] = useState(null);
 
   const [searchBoxValue, setSearchBoxValue] = useState('');
   const [searchBoxRevision, setSearchBoxRevision] = useState(0);
@@ -70,6 +102,8 @@ export default function App() {
 
     setLoading(true);
     setSearchError(null);
+    setSortMode('relevance');
+    const startedAt = performance.now();
     try {
       const data = await searchProducts({
         query: trimmed,
@@ -83,6 +117,7 @@ export default function App() {
       setResultFlagsSig(flagsSignature(activeFlags));
       setCurrentPage(data.current_page);
       setEsOk(true);
+      setLastLatencyMs(Math.round(performance.now() - startedAt));
     } catch (error) {
       setSearchError(error instanceof ApiError ? error.message : 'Beklenmeyen bir hata oluştu.');
       setResult(null);
@@ -175,10 +210,48 @@ export default function App() {
 
   const isStale = result && resultFlagsSig !== flagsSignature(flags);
   const showResults = result && !isStale && !searchError;
+  const hasHits = showResults && result.hits.length > 0;
+  const sortedHits = hasHits ? sortHits(result.hits, sortMode) : [];
+  const maxScore = hasHits ? Math.max(...result.hits.map((h) => h.score || 0)) : 0;
 
   return (
     <div className="page">
-      <Hero hero={config.hero} />
+      <Topbar hero={config.hero} esOk={esOk} statusLabels={config.labels} />
+
+      <Hero hero={config.hero}>
+        <div className="search-row">
+          <SearchBox
+            value={searchBoxValue}
+            revision={searchBoxRevision}
+            suggestions={liveSuggestions ? suggestions : []}
+            placeholder={config.search_placeholder}
+            debounceMs={config.debounce_ms}
+            panelMaxHeightPx={config.autocomplete_ui.panel_max_height_px}
+            rowHeightPx={config.autocomplete_ui.row_height_px}
+            showImages={config.autocomplete_ui.show_images}
+            onTypingChange={(text) => {
+              setSearchBoxValue(text);
+              handleTypingChange(text);
+            }}
+            onSubmit={handleSubmit}
+            onSelect={handleSelect}
+          />
+          <button type="button" className="search-button" onClick={handleButtonClick}>
+            {config.labels.search_button}
+          </button>
+        </div>
+
+        <FeatureChips labels={config.labels} flags={flags} liveSuggestions={liveSuggestions} />
+
+        {config.example_queries?.length > 0 && (
+          <p className="hero-hint">
+            {config.labels.hero_hint_prefix}{' '}
+            <button type="button" onClick={() => handleExampleClick(config.example_queries[0])}>
+              {formatMessage(config.labels.hero_hint_cta, { example: config.example_queries[0] })}
+            </button>
+          </p>
+        )}
+      </Hero>
 
       <div className="layout">
         <div className={`sidebar-shell${sidebarOpen ? '' : ' is-collapsed'}`} aria-hidden={!sidebarOpen}>
@@ -189,44 +262,25 @@ export default function App() {
             liveSuggestions={liveSuggestions}
             onLiveSuggestionsChange={setLiveSuggestions}
             esOk={esOk}
+            lastLatencyMs={lastLatencyMs}
           />
         </div>
 
-        <button
-          type="button"
-          className="sidebar-toggle"
-          onClick={() => setSidebarOpen((open) => !open)}
-          aria-expanded={sidebarOpen}
-          aria-label={sidebarOpen ? 'Ayarlar panelini gizle' : 'Ayarlar panelini göster'}
-          title={sidebarOpen ? 'Ayarlar panelini gizle' : 'Ayarlar panelini göster'}
-        >
-          {sidebarOpen ? '‹' : '›'}
-        </button>
-
         <main className="main-column">
-          <div className="search-row">
-            <SearchBox
-              value={searchBoxValue}
-              revision={searchBoxRevision}
-              suggestions={liveSuggestions ? suggestions : []}
-              placeholder={config.search_placeholder}
-              debounceMs={config.debounce_ms}
-              panelMaxHeightPx={config.autocomplete_ui.panel_max_height_px}
-              rowHeightPx={config.autocomplete_ui.row_height_px}
-              showImages={config.autocomplete_ui.show_images}
-              onTypingChange={(text) => {
-                setSearchBoxValue(text);
-                handleTypingChange(text);
-              }}
-              onSubmit={handleSubmit}
-              onSelect={handleSelect}
-            />
-            <button type="button" className="search-button" onClick={handleButtonClick}>
-              {config.labels.search_button}
-            </button>
-          </div>
-
-          <FeatureChips labels={config.labels} flags={flags} liveSuggestions={liveSuggestions} />
+          <div ref={resultsTopRef} />
+          <ResultHeader
+            config={config}
+            query={result?.query}
+            total={result?.total}
+            shown={result?.hits.length}
+            flags={flags}
+            intent={result?.intent}
+            hasResults={Boolean(hasHits)}
+            sortMode={sortMode}
+            onSortChange={setSortMode}
+            sidebarOpen={sidebarOpen}
+            onToggleSidebar={() => setSidebarOpen((open) => !open)}
+          />
 
           {typedTooShort && liveSuggestions && (
             <p className="hint-caption">
@@ -238,14 +292,12 @@ export default function App() {
           {suggestionsError && (
             <div className="alert alert-warning">{config.messages.suggestions_unavailable_warning}</div>
           )}
-
           {isStale && <div className="alert alert-info">{config.messages.settings_changed_info}</div>}
-
           {searchError && <div className="alert alert-error">{searchError}</div>}
 
-          {loading && <div className="loading-caption">Ürünler aranıyor…</div>}
+          {loading && <SkeletonGrid />}
 
-          {!showResults && !loading && !queryText && (
+          {!loading && !showResults && !queryText && (
             <EmptyState
               labels={config.labels}
               exampleQueries={config.example_queries}
@@ -253,26 +305,15 @@ export default function App() {
             />
           )}
 
-          {showResults && result.hits.length === 0 && (
-            <div className="alert alert-info">
-              {formatMessage(config.messages.no_results_info, { query: result.query })}
-            </div>
+          {!loading && showResults && result.hits.length === 0 && (
+            <ZeroResults config={config} query={result.query} onExampleClick={handleExampleClick} />
           )}
 
-          {showResults && result.hits.length > 0 && (
+          {!loading && hasHits && (
             <>
-              <div ref={resultsTopRef} />
-              <ResultHeader
-                config={config}
-                query={result.query}
-                total={result.total}
-                shown={result.hits.length}
-                flags={flags}
-                intent={result.intent}
-              />
-              <div className="product-list">
-                {result.hits.map((product) => (
-                  <ProductCard key={product.asin} product={product} />
+              <div className="grid">
+                {sortedHits.map((product) => (
+                  <ProductCard key={product.asin} product={product} query={result.query} maxScore={maxScore} />
                 ))}
               </div>
               <Pagination config={config} result={result} onPrev={handlePrevPage} onNext={handleNextPage} />
@@ -280,6 +321,8 @@ export default function App() {
           )}
         </main>
       </div>
+
+      <Footer indexCount={config.elasticsearch.search_index_count} />
     </div>
   );
 }

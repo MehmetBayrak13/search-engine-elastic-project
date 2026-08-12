@@ -119,6 +119,9 @@ export default function SearchBox({
 
   return (
     <div className="si-wrap">
+      <span className="si-icon" aria-hidden="true">
+        🔍
+      </span>
       <input
         className="si-input"
         type="text"

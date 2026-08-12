@@ -2,7 +2,8 @@ export default function EmptyState({ labels, exampleQueries, onExampleClick }) {
   return (
     <div className="empty-state">
       <div className="es-icon">{labels.empty_state_icon || '🔍'}</div>
-      <div className="es-text">{labels.empty_state_text}</div>
+      <div className="es-title">{labels.empty_state_title}</div>
+      <p className="es-text">{labels.empty_state_text}</p>
       <div className="example-row">
         {exampleQueries.map((example) => (
           <button

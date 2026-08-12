@@ -1,10 +1,10 @@
-export default function Hero({ hero }) {
+export default function Hero({ hero, children }) {
   if (!hero) return null;
   return (
-    <div className="hero">
-      <div className="hero-logo">{hero.logo}</div>
+    <section className="hero">
       <h1 className="hero-title">{hero.title}</h1>
-      <p className="hero-subtitle">{hero.subtitle}</p>
-    </div>
+      <p className="hero-sub">{hero.subtitle}</p>
+      <div className="search-deck">{children}</div>
+    </section>
   );
 }
