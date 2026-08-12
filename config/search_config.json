@@ -93,6 +93,10 @@
     "factor": 0.03,
     "baseline": 1.0
   },
+  "rating_sort": {
+    "minimum_votes": 50,
+    "prior_rating": 3.5
+  },
   "title_ranking": {
     "enabled": true,
     "exact_field": "title.keyword",

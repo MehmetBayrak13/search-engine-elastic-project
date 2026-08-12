@@ -91,6 +91,10 @@ def _minimal_search_config(**overrides):
             "factor": 0.03,
             "baseline": 1.0,
         },
+        "rating_sort": {
+            "minimum_votes": 50,
+            "prior_rating": 4.0,
+        },
         "pagination": {
             "enabled": True,
             "page_size": 20,
@@ -334,6 +338,36 @@ def test_popularity_ranking_negative_factor_is_rejected(tmp_path):
 def test_popularity_ranking_negative_baseline_is_rejected(tmp_path):
     data = _minimal_search_config()
     data["popularity_ranking"]["baseline"] = -1
+    path = _write_json(tmp_path / "search_config.json", data)
+    with pytest.raises(ConfigError):
+        load_search_config(path)
+
+
+def test_rating_sort_loads_from_default_repo_config():
+    app_config = load_search_config()
+    assert app_config.rating_sort.minimum_votes > 0
+    assert 0 < app_config.rating_sort.prior_rating <= 5
+
+
+def test_rating_sort_negative_minimum_votes_is_rejected(tmp_path):
+    data = _minimal_search_config()
+    data["rating_sort"]["minimum_votes"] = -1
+    path = _write_json(tmp_path / "search_config.json", data)
+    with pytest.raises(ConfigError):
+        load_search_config(path)
+
+
+def test_rating_sort_prior_rating_above_five_is_rejected(tmp_path):
+    data = _minimal_search_config()
+    data["rating_sort"]["prior_rating"] = 5.5
+    path = _write_json(tmp_path / "search_config.json", data)
+    with pytest.raises(ConfigError):
+        load_search_config(path)
+
+
+def test_rating_sort_missing_section_is_rejected(tmp_path):
+    data = _minimal_search_config()
+    del data["rating_sort"]
     path = _write_json(tmp_path / "search_config.json", data)
     with pytest.raises(ConfigError):
         load_search_config(path)

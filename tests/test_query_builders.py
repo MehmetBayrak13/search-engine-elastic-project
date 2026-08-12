@@ -743,9 +743,47 @@ def test_sort_price_desc_orders_by_price_descending():
     assert payload["sort"] == [{"price": {"order": "desc", "missing": "_last"}}, "_score"]
 
 
-def test_sort_rating_orders_by_average_rating_descending():
+def test_sort_rating_uses_bayesian_weighted_script_not_raw_average():
+    # Sadece average_rating'e göre azalan sıralama, 3 değerlendirmeli 5.0
+    # puanlık bir ürünü 1000 değerlendirmeli 4.0 puanlık bir ürünün önüne
+    # koyardı -- bu istenmeyen davranış (bkz. RatingSortConfig docstring'i).
+    # Bunun yerine (v/(v+m))*R + (m/(v+m))*C Bayesian formülünü uygulayan
+    # bir _script sort kullanılır.
     payload = app.build_search_query("kamera", sort="rating")
-    assert payload["sort"] == [{"average_rating": {"order": "desc", "missing": "_last"}}, "_score"]
+    sort_clause = payload["sort"]
+    assert sort_clause[0]["_script"]["type"] == "number"
+    assert sort_clause[0]["_script"]["order"] == "desc"
+    params = sort_clause[0]["_script"]["script"]["params"]
+    assert params["m"] == app.CONFIG.rating_sort.minimum_votes
+    assert params["prior"] == app.CONFIG.rating_sort.prior_rating
+    assert sort_clause[1] == "_score"
+
+
+def test_rating_sort_formula_favors_high_vote_count_over_lone_perfect_rating():
+    # Kullanıcının verdiği somut örnek: 1000 değerlendirme + 4.0 puan,
+    # 3 değerlendirme + 5.0 puandan daha yüksek sıralanmalı.
+    import math
+
+    m = app.CONFIG.rating_sort.minimum_votes
+    c = app.CONFIG.rating_sort.prior_rating
+
+    def weighted(v, r):
+        return (v / (v + m)) * r + (m / (v + m)) * c
+
+    assert weighted(1000, 4.0) > weighted(3, 5.0)
+
+
+def test_rating_sort_formula_pulls_low_vote_products_toward_prior():
+    m = app.CONFIG.rating_sort.minimum_votes
+    c = app.CONFIG.rating_sort.prior_rating
+
+    def weighted(v, r):
+        return (v / (v + m)) * r + (m / (v + m)) * c
+
+    # Oy sayısı sıfıra yaklaştıkça skor prior'a (C) yaklaşmalı, ürünün
+    # kendi (güvenilmez) puanına değil.
+    assert abs(weighted(0, 5.0) - c) < 1e-9
+    assert weighted(1, 5.0) < weighted(1000, 5.0)
 
 
 def test_sort_unknown_value_falls_back_to_relevance():

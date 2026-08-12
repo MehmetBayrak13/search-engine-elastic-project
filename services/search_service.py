@@ -948,11 +948,44 @@ def relevance_debug_from_matched_queries(matched_queries: list[str] | None, cfg:
 _SORT_CLAUSES: dict[str, list] = {
     "price-asc": [{"price": {"order": "asc", "missing": "_last"}}, "_score"],
     "price-desc": [{"price": {"order": "desc", "missing": "_last"}}, "_score"],
-    "rating": [{"average_rating": {"order": "desc", "missing": "_last"}}, "_score"],
 }
+# "rating" burada YOK — statik bir alan sıralaması değil, `_rating_sort_clause`
+# ile config'ten (rating_sort) üretilen bir Bayesian ağırlıklı puan formülü
+# kullanır (bkz. RatingSortConfig docstring'i).
 # API katmanının kabul edilen değerleri doğrulamak için kullandığı genel
 # liste — "relevance" (varsayılan, sort alanı hiç eklenmez) dahil.
-SORT_MODES = ("relevance", *_SORT_CLAUSES.keys())
+SORT_MODES = ("relevance", *_SORT_CLAUSES.keys(), "rating")
+
+
+def _rating_sort_clause(cfg: "AppConfig") -> list:
+    """`(v/(v+m))*R + (m/(v+m))*C` Bayesian ağırlıklı puan formülünü ES
+    `_script` sort'una çevirir (bkz. `RatingSortConfig` docstring'i — bu
+    formül `field_value_factor` ile ifade edilemediği için BİLİNÇLİ bir
+    script istisnasıdır, yalnızca `sort=rating` açıkça istendiğinde
+    çalışır). `rating_number`/`average_rating` eksik belgelerde sırasıyla
+    `0` oy ve `prior_rating` (nötr, ne ödül ne ceza) varsayılır — bu yüzden
+    hiçbir belge script hatasıyla aramayı bozamaz."""
+    rs = cfg.rating_sort
+    script = (
+        "double v = doc['rating_number'].size() == 0 ? 0.0 : (double) doc['rating_number'].value; "
+        "double r = doc['average_rating'].size() == 0 ? params.prior : (double) doc['average_rating'].value; "
+        "double m = (double) params.m; "
+        "return (v / (v + m)) * r + (m / (v + m)) * params.prior;"
+    )
+    return [
+        {
+            "_script": {
+                "type": "number",
+                "order": "desc",
+                "script": {
+                    "lang": "painless",
+                    "source": script,
+                    "params": {"m": rs.minimum_votes, "prior": rs.prior_rating},
+                },
+            }
+        },
+        "_score",
+    ]
 
 
 def build_search_query(
@@ -1001,11 +1034,13 @@ def build_search_query(
       içinde skor düşürücü olarak kullanılır (bkz. `_soft_negative_boosting_negative_clause`);
       bu nedenle tek başlarına hiçbir belgeyi elemezler.
 
-    `sort`: `_SORT_CLAUSES`'ta tanımlı bir anahtar değilse (ör. bilinmeyen
-      bir değer veya varsayılan `"relevance"`) sıralama alanı hiç eklenmez —
-      ES'in kendi `_score` (relevance) sıralaması geçerli olur. Bilinen bir
-      anahtarsa ES `sort` parametresi eklenir, `_score` her zaman ikincil
-      tie-break kriteri olarak kalır.
+    `sort`: `"rating"` ise `_rating_sort_clause` ile Bayesian ağırlıklı puan
+      formülü uygulanır; `_SORT_CLAUSES`'ta tanımlı bir anahtarsa (`price-asc`/
+      `price-desc`) o statik alan sıralaması eklenir; ikisi de değilse (ör.
+      bilinmeyen bir değer veya varsayılan `"relevance"`) sıralama alanı hiç
+      eklenmez — ES'in kendi `_score` (relevance) sıralaması geçerli olur.
+      Bilinen bir değerse `_score` her zaman ikincil tie-break kriteri olarak
+      kalır.
 
     Böylece kategori boostları tek başına belge döndürmez; ürün önce lexical
     (veya çevrilmiş bir lexical alternatif) olarak eşleşmek zorundadır.
@@ -1211,7 +1246,9 @@ def build_search_query(
     }
     if from_ is not None:
         payload["from"] = from_
-    if sort in _SORT_CLAUSES:
+    if sort == "rating":
+        payload["sort"] = _rating_sort_clause(cfg)
+    elif sort in _SORT_CLAUSES:
         payload["sort"] = _SORT_CLAUSES[sort]
     return payload
 

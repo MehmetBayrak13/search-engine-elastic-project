@@ -262,6 +262,37 @@ class PopularityRankingConfig:
 
 
 @dataclass(frozen=True)
+class RatingSortConfig:
+    """`sort=rating` seçildiğinde kullanılan Bayesian/IMDB-tarzı ağırlıklı
+    puan formülü: `(v/(v+m))*R + (m/(v+m))*C` — burada `v` = `rating_number`,
+    `R` = `average_rating`, `m` = `minimum_votes`, `C` = `prior_rating`.
+    Amaç: 1000 değerlendirmeli 4.0 puanlık bir ürünün, 3 değerlendirmeli
+    5.0 puanlık bir ürünü haksız yere geçmesini engellemek — `v` küçüldükçe
+    ürünün kendi puanının ağırlığı `C` (veri setinin genel ortalaması)
+    lehine azalır, `v >> m` olduğunda ise ürünün gerçek ortalaması hakim
+    olur. Bu formül `field_value_factor`/`weight` kombinasyonlarıyla
+    (mevcut `popularity_ranking`/`quality_ranking` deseni) ifade
+    EDİLEMEZ — iki alan arasında oransal bir bağımlılık içerir, bu yüzden
+    CLAUDE.md'nin genel 'script_score kullanılmaz' kuralına BİLİNÇLİ bir
+    istisna olarak `_script` sort (skorlama değil, yalnızca sıralama)
+    kullanılır; ana relevance pipeline'ını etkilemez, yalnızca kullanıcı
+    açıkça bu sıralamayı seçtiğinde çalışır (bkz. `_rating_sort_clause`).
+
+    `prior_rating` BİLİNÇLİ olarak veri setinin gerçek ortalamasının (canlı
+    clusterda ölçüldü: ~4.16) ALTINDA tutulur. Matematiksel gerekçe: eğer
+    `C` >= ürünün kendi ortalamasına (`R`) eşit ya da üzerindeyse, ağırlıklı
+    skor HİÇBİR `m` değerinde ürünün kendi ortalamasını GEÇEMEZ (yalnızca
+    ona yaklaşır) — yani `R < C` olan yüksek hacimli bir ürün, `R > C` olan
+    düşük hacimli bir ürünü ASLA geçemez, `m` ne kadar büyük olursa olsun.
+    Kullanıcının somut örneğini (1000 değerlendirme + 4.0 puan > 3
+    değerlendirme + 5.0 puan) sağlamak için `C` her iki değerin de (4.0 ve
+    5.0) altında olmalı."""
+
+    minimum_votes: float
+    prior_rating: float
+
+
+@dataclass(frozen=True)
 class TitleRankingConfig:
     """Title alanı için katmanlı skor ayarları. Yalnızca burada tanımlı iki
     YENİ katmanı (exact, prefix) kontrol eder — phrase/normal/fuzzy
@@ -461,6 +492,7 @@ class AppConfig:
     dynamic_intent: DynamicIntentConfig
     quality_ranking: QualityRankingConfig
     popularity_ranking: PopularityRankingConfig
+    rating_sort: RatingSortConfig
     title_ranking: TitleRankingConfig
     intent_ranking: IntentRankingConfig
     field_relevance: FieldRelevanceConfig
@@ -671,6 +703,17 @@ def _build_popularity_ranking(raw: Any, context: str) -> PopularityRankingConfig
     )
 
 
+def _build_rating_sort(raw: Any, context: str) -> RatingSortConfig:
+    raw = _require_dict(raw, context)
+    prior_rating = _require_positive_number(raw.get("prior_rating"), f"{context}.prior_rating")
+    if prior_rating > 5:
+        raise ConfigError(f"{context}.prior_rating 0-5 aralığında olmalı (alınan: {prior_rating!r}).")
+    return RatingSortConfig(
+        minimum_votes=_require_positive_number(raw.get("minimum_votes"), f"{context}.minimum_votes"),
+        prior_rating=prior_rating,
+    )
+
+
 def _build_pagination(raw: Any, context: str) -> PaginationConfig:
     raw = _require_dict(raw, context)
     page_size = _require_positive_int(raw.get("page_size"), f"{context}.page_size")
@@ -848,6 +891,7 @@ def load_search_config(path: Path = SEARCH_CONFIG_PATH) -> AppConfig:
     dynamic_intent = _build_dynamic_intent(raw.get("dynamic_intent"), "dynamic_intent")
     quality_ranking = _build_quality_ranking(raw.get("quality_ranking"), "quality_ranking")
     popularity_ranking = _build_popularity_ranking(raw.get("popularity_ranking"), "popularity_ranking")
+    rating_sort = _build_rating_sort(raw.get("rating_sort"), "rating_sort")
     title_ranking = _build_title_ranking(raw.get("title_ranking"), "title_ranking")
     intent_ranking = _build_intent_ranking(raw.get("intent_ranking"), "intent_ranking")
     field_relevance = _build_field_relevance(raw.get("field_relevance"), "field_relevance")
@@ -891,6 +935,7 @@ def load_search_config(path: Path = SEARCH_CONFIG_PATH) -> AppConfig:
         dynamic_intent=dynamic_intent,
         quality_ranking=quality_ranking,
         popularity_ranking=popularity_ranking,
+        rating_sort=rating_sort,
         title_ranking=title_ranking,
         intent_ranking=intent_ranking,
         field_relevance=field_relevance,
