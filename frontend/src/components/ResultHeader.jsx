@@ -17,8 +17,6 @@ export default function ResultHeader({
   config,
   query,
   total,
-  shown,
-  flags,
   intent,
   hasResults,
   sortMode,
@@ -26,18 +24,7 @@ export default function ResultHeader({
   sidebarOpen,
   onToggleSidebar,
 }) {
-  const { labels, messages } = config;
-  const flagLabelKeys = {
-    enablePhrase: 'method_phrase',
-    enableMultiMatch: 'method_multi_match',
-    enableFuzzy: 'method_fuzzy',
-    enableExactAsin: 'method_exact_asin',
-  };
-  const methods =
-    Object.entries(flagLabelKeys)
-      .filter(([key]) => flags[key])
-      .map(([, labelKey]) => labels[labelKey])
-      .join(', ') || 'yok';
+  const { messages } = config;
 
   return (
     <div className="results-bar">
@@ -45,8 +32,6 @@ export default function ResultHeader({
         {hasResults ? (
           <>
             {formatMessage(messages.result_header_query, { query, total })}
-            {' — '}
-            {formatMessage(messages.result_header_meta, { shown, methods })}
             {intent && (
               <span className="intent-badge">
                 {intent.icon} {intent.label}

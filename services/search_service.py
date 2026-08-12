@@ -56,6 +56,7 @@ __all__ = [
     "build_search_query",
     "search_products",
     "relevance_debug_from_matched_queries",
+    "SORT_MODES",
 ]
 
 # ---------------------------------------------------------------------------
@@ -938,6 +939,22 @@ def relevance_debug_from_matched_queries(matched_queries: list[str] | None, cfg:
     }
 
 
+# Sıralama seçenekleri BİLİNÇLİ olarak kodda sabit tutulur (config'ten veya
+# kullanıcıdan keyfi alan adı ALINMAZ — bkz. CLAUDE.md §8 "arbitrary field
+# names from user input" güvenlik sınırı). `_score` her zaman ikincil
+# (tie-break) kriter olarak eklenir; `missing: "_last"` fiyatı/puanı
+# olmayan belgeleri her zaman sona iter (client-side sıralamanın eski
+# davranışıyla tutarlı).
+_SORT_CLAUSES: dict[str, list] = {
+    "price-asc": [{"price": {"order": "asc", "missing": "_last"}}, "_score"],
+    "price-desc": [{"price": {"order": "desc", "missing": "_last"}}, "_score"],
+    "rating": [{"average_rating": {"order": "desc", "missing": "_last"}}, "_score"],
+}
+# API katmanının kabul edilen değerleri doğrulamak için kullandığı genel
+# liste — "relevance" (varsayılan, sort alanı hiç eklenmez) dahil.
+SORT_MODES = ("relevance", *_SORT_CLAUSES.keys())
+
+
 def build_search_query(
     query_text: str,
     enable_phrase: bool = True,
@@ -950,6 +967,7 @@ def build_search_query(
     track_total_hits: bool | None = None,
     apply_intent_reranking: bool = True,
     intent_signals: "IntentSignals | None" = None,
+    sort: str = "relevance",
     *,
     config: "AppConfig | None" = None,
     include_relevance_debug: bool = False,
@@ -982,6 +1000,12 @@ def build_search_query(
       `must_not`'a girmez — yalnızca dış `boosting.negative` sarmalayıcısı
       içinde skor düşürücü olarak kullanılır (bkz. `_soft_negative_boosting_negative_clause`);
       bu nedenle tek başlarına hiçbir belgeyi elemezler.
+
+    `sort`: `_SORT_CLAUSES`'ta tanımlı bir anahtar değilse (ör. bilinmeyen
+      bir değer veya varsayılan `"relevance"`) sıralama alanı hiç eklenmez —
+      ES'in kendi `_score` (relevance) sıralaması geçerli olur. Bilinen bir
+      anahtarsa ES `sort` parametresi eklenir, `_score` her zaman ikincil
+      tie-break kriteri olarak kalır.
 
     Böylece kategori boostları tek başına belge döndürmez; ürün önce lexical
     (veya çevrilmiş bir lexical alternatif) olarak eşleşmek zorundadır.
@@ -1187,6 +1211,8 @@ def build_search_query(
     }
     if from_ is not None:
         payload["from"] = from_
+    if sort in _SORT_CLAUSES:
+        payload["sort"] = _SORT_CLAUSES[sort]
     return payload
 
 
@@ -1269,6 +1295,7 @@ def search_products(
     enable_fuzzy: bool = True,
     enable_exact_asin: bool = True,
     page: int = 1,
+    sort: str = "relevance",
     *,
     fetch_aggregations=None,
     config: "AppConfig | None" = None,
@@ -1318,6 +1345,7 @@ def search_products(
             page=normalized_page,
             track_total_hits=True,
             intent_signals=intent_signals,
+            sort=sort,
             config=cfg,
             include_relevance_debug=include_relevance_debug,
         )

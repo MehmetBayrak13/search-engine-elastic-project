@@ -726,3 +726,40 @@ def test_relevance_debug_from_matched_queries_empty_input():
 
     result = relevance_debug_from_matched_queries([], app.CONFIG)
     assert result == {"matched_fields": [], "consensus_level": 0, "contradictions": [], "applied_penalty": 1.0}
+
+
+def test_sort_relevance_default_omits_sort_key():
+    payload = app.build_search_query("kamera")
+    assert "sort" not in payload
+
+
+def test_sort_price_asc_orders_by_price_with_missing_last_and_score_tiebreak():
+    payload = app.build_search_query("kamera", sort="price-asc")
+    assert payload["sort"] == [{"price": {"order": "asc", "missing": "_last"}}, "_score"]
+
+
+def test_sort_price_desc_orders_by_price_descending():
+    payload = app.build_search_query("kamera", sort="price-desc")
+    assert payload["sort"] == [{"price": {"order": "desc", "missing": "_last"}}, "_score"]
+
+
+def test_sort_rating_orders_by_average_rating_descending():
+    payload = app.build_search_query("kamera", sort="rating")
+    assert payload["sort"] == [{"average_rating": {"order": "desc", "missing": "_last"}}, "_score"]
+
+
+def test_sort_unknown_value_falls_back_to_relevance():
+    # build_search_query saf bir fonksiyon olarak fail-safe davranır --
+    # geçersiz değerlerin reddi API katmanının işidir (bkz. api/main.py:
+    # search_service.SORT_MODES doğrulaması).
+    payload = app.build_search_query("kamera", sort="bogus")
+    assert "sort" not in payload
+
+
+def test_sort_modes_exposes_relevance_and_all_sort_clauses():
+    from services.search_service import SORT_MODES
+
+    assert "relevance" in SORT_MODES
+    assert "price-asc" in SORT_MODES
+    assert "price-desc" in SORT_MODES
+    assert "rating" in SORT_MODES

@@ -104,6 +104,24 @@ def test_search_success(monkeypatch):
     assert hit["product_url"] == "https://www.amazon.com/dp/B000TEST"
 
 
+def test_search_rejects_unknown_sort_value():
+    response = client.get("/api/search", params={"q": "kamera", "sort": "bogus"})
+    assert response.status_code == 400
+
+
+def test_search_accepts_known_sort_values_and_forwards_to_query(monkeypatch):
+    captured = {}
+
+    def fake_post_search(payload, timeout=20, index=None, search_type=None):
+        captured["sort"] = payload.get("sort")
+        return {"hits": {"hits": [], "total": {"value": 0}}}, None
+
+    monkeypatch.setattr(search_service, "_post_search", fake_post_search)
+    response = client.get("/api/search", params={"q": "kamera", "sort": "price-asc"})
+    assert response.status_code == 200
+    assert captured["sort"] == [{"price": {"order": "asc", "missing": "_last"}}, "_score"]
+
+
 def test_search_elasticsearch_error_becomes_502(monkeypatch):
     _mock_post_search(monkeypatch, (None, "Elasticsearch bir hata döndürdü: 500"))
     response = client.get("/api/search", params={"q": "kamera"})

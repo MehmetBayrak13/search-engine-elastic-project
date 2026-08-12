@@ -26,32 +26,6 @@ function flagsSignature(flags) {
   return JSON.stringify(Object.entries(flags).sort());
 }
 
-/**
- * Sıralama YALNIZCA o an ekrandaki (mevcut sayfadaki) sonuçları yeniden
- * sıralar — sunucudan tekrar veri çekmez. Fiyatı/puanı olmayan ürünler
- * sıralama yönünden bağımsız olarak her zaman en sona düşer.
- */
-function sortHits(hits, mode) {
-  if (mode === 'relevance') return hits;
-  const withValue = (getValue) => {
-    const decorated = hits.map((hit, index) => ({ hit, index, value: getValue(hit) }));
-    decorated.sort((a, b) => {
-      if (a.value == null && b.value == null) return a.index - b.index;
-      if (a.value == null) return 1;
-      if (b.value == null) return -1;
-      return mode === 'price-desc' || mode === 'rating' ? b.value - a.value : a.value - b.value;
-    });
-    return decorated.map((d) => d.hit);
-  };
-  if (mode === 'price-asc' || mode === 'price-desc') {
-    return withValue((hit) => (hit.price != null && !Number.isNaN(Number(hit.price)) ? Number(hit.price) : null));
-  }
-  if (mode === 'rating') {
-    return withValue((hit) => (hit.average_rating != null ? Number(hit.average_rating) : null));
-  }
-  return hits;
-}
-
 export default function App() {
   const [config, setConfig] = useState(null);
   const [configError, setConfigError] = useState(null);
@@ -89,7 +63,7 @@ export default function App() {
     getHealth().catch(() => {});
   }, []);
 
-  const executeSearch = async (text, page, activeFlags) => {
+  const executeSearch = async (text, page, activeFlags, sortValue = 'relevance') => {
     const trimmed = (text || '').trim();
     if (!trimmed) {
       setSearchError(config.messages.empty_query_warning);
@@ -102,7 +76,6 @@ export default function App() {
 
     setLoading(true);
     setSearchError(null);
-    setSortMode('relevance');
     const startedAt = performance.now();
     try {
       const data = await searchProducts({
@@ -112,6 +85,7 @@ export default function App() {
         enableMultiMatch: activeFlags.enableMultiMatch,
         enableFuzzy: activeFlags.enableFuzzy,
         enableExactAsin: activeFlags.enableExactAsin,
+        sort: sortValue,
       });
       setResult(data);
       setResultFlagsSig(flagsSignature(activeFlags));
@@ -129,7 +103,14 @@ export default function App() {
   const triggerExplicitSearch = (text) => {
     setQueryText(text.trim());
     setCurrentPage(1);
-    executeSearch(text, 1, flags);
+    setSortMode('relevance');
+    executeSearch(text, 1, flags, 'relevance');
+  };
+
+  const handleSortChange = (nextSort) => {
+    setSortMode(nextSort);
+    setCurrentPage(1);
+    executeSearch(result.query, 1, flags, nextSort);
   };
 
   const handleExampleClick = (example) => {
@@ -185,14 +166,14 @@ export default function App() {
   const handlePrevPage = () => {
     const page = Math.max(1, currentPage - 1);
     setCurrentPage(page);
-    executeSearch(result.query, page, flags);
+    executeSearch(result.query, page, flags, sortMode);
     resultsTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
   const handleNextPage = () => {
     const page = currentPage + 1;
     setCurrentPage(page);
-    executeSearch(result.query, page, flags);
+    executeSearch(result.query, page, flags, sortMode);
     resultsTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
@@ -211,7 +192,6 @@ export default function App() {
   const isStale = result && resultFlagsSig !== flagsSignature(flags);
   const showResults = result && !isStale && !searchError;
   const hasHits = showResults && result.hits.length > 0;
-  const sortedHits = hasHits ? sortHits(result.hits, sortMode) : [];
   const maxScore = hasHits ? Math.max(...result.hits.map((h) => h.score || 0)) : 0;
 
   return (
@@ -272,12 +252,10 @@ export default function App() {
             config={config}
             query={result?.query}
             total={result?.total}
-            shown={result?.hits.length}
-            flags={flags}
             intent={result?.intent}
             hasResults={Boolean(hasHits)}
             sortMode={sortMode}
-            onSortChange={setSortMode}
+            onSortChange={handleSortChange}
             sidebarOpen={sidebarOpen}
             onToggleSidebar={() => setSidebarOpen((open) => !open)}
           />
@@ -312,7 +290,7 @@ export default function App() {
           {!loading && hasHits && (
             <>
               <div className="grid">
-                {sortedHits.map((product) => (
+                {result.hits.map((product) => (
                   <ProductCard key={product.asin} product={product} query={result.query} maxScore={maxScore} />
                 ))}
               </div>

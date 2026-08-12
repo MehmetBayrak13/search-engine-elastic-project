@@ -166,6 +166,7 @@ def search(
     enable_multi_match: bool = Query(default=True),
     enable_fuzzy: bool = Query(default=True),
     enable_exact_asin: bool = Query(default=True),
+    sort: str = Query(default="relevance"),
     debug_intent: bool = Query(default=False),
     debug_relevance: bool = Query(default=False),
 ):
@@ -176,6 +177,11 @@ def search(
         raise HTTPException(status_code=400, detail=config.ui.message("empty_query_warning"))
     if not any([enable_phrase, enable_multi_match, enable_fuzzy, enable_exact_asin]):
         raise HTTPException(status_code=400, detail=config.ui.message("no_method_warning"))
+    if sort not in search_service.SORT_MODES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Geçersiz sort değeri: {sort!r}. Geçerli değerler: {', '.join(search_service.SORT_MODES)}",
+        )
 
     result = search_service.search_products(
         query_text,
@@ -184,6 +190,7 @@ def search(
         enable_fuzzy=enable_fuzzy,
         enable_exact_asin=enable_exact_asin,
         page=page,
+        sort=sort,
         fetch_aggregations=_fetch_category_aggregations,
         include_relevance_debug=debug_relevance,
     )
