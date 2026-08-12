@@ -57,8 +57,8 @@ def _mock_post_search(monkeypatch, response=({"hits": {"hits": [], "total": {"va
     """`app.search_service._post_search`ü mock'lar ve yapılan çağrıları kaydeder."""
     calls = []
 
-    def fake_post_search(payload, timeout=20, index=None):
-        calls.append({"payload": payload, "timeout": timeout, "index": index})
+    def fake_post_search(payload, timeout=20, index=None, search_type=None):
+        calls.append({"payload": payload, "timeout": timeout, "index": index, "search_type": search_type})
         return response
 
     monkeypatch.setattr(app.search_service, "_post_search", fake_post_search)
@@ -185,6 +185,32 @@ def test_last_page_with_partial_results_has_correct_end_item(monkeypatch):
     assert result.start_item == 41
     assert result.end_item == 45
     assert len(result.hits) == 5
+
+
+def test_search_products_requests_dfs_query_then_fetch_by_default(monkeypatch):
+    # Az sayıda shard'da terim istatistikleri shard başına hesaplanır (query_then_fetch),
+    # bu da aynı terimin farklı shard'larda çok farklı IDF alıp alakasız sonuçların öne
+    # çıkmasına yol açabilir (bkz. CLAUDE.md relevance notları). dfs_query_then_fetch bunu
+    # global terim istatistiğiyle düzeltir.
+    calls = _mock_post_search(monkeypatch)
+    app.search_products("kamera", page=1)
+    # calls[0] kategori keşfi aggregation isteğidir (search_type hiç geçmez);
+    # asıl ürün araması son çağrıdır.
+    assert calls[-1]["search_type"] == "dfs_query_then_fetch"
+
+
+def test_search_products_omits_dfs_query_then_fetch_when_disabled(monkeypatch):
+    import dataclasses
+
+    calls = _mock_post_search(monkeypatch)
+    disabled_cfg = dataclasses.replace(
+        app.search_service.CONFIG,
+        elasticsearch=dataclasses.replace(
+            app.search_service.CONFIG.elasticsearch, use_dfs_query_then_fetch=False
+        ),
+    )
+    app.search_products("kamera", page=1, config=disabled_cfg)
+    assert calls[-1]["search_type"] is None
 
 
 def test_has_previous_and_has_next_first_page(monkeypatch):

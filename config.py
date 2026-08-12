@@ -110,6 +110,13 @@ class ElasticsearchConfig:
     search_timeout_seconds: int
     autocomplete_timeout_seconds: int
     track_total_hits: bool
+    # search_indices birden fazla shard'a yayılıyor; ES varsayılan
+    # query_then_fetch her shard'ın IDF'ini KENDİ terim istatistiğinden
+    # hesaplar, bu da az sayıda shard'da aynı terimin shard'lar arasında
+    # çok farklı IDF alıp alakasız sonuçların öne çıkmasına yol açabilir.
+    # dfs_query_then_fetch global terim istatistiği toplayıp bu sapmayı
+    # giderir (bkz. arama alaka sorunları — CLAUDE.md relevance notları).
+    use_dfs_query_then_fetch: bool
 
     @property
     def search_index_expr(self) -> str:
@@ -722,6 +729,9 @@ def load_search_config(path: Path = SEARCH_CONFIG_PATH) -> AppConfig:
             es_raw.get("autocomplete_timeout_seconds"), "elasticsearch.autocomplete_timeout_seconds"
         ),
         track_total_hits=_require_bool(es_raw.get("track_total_hits"), "elasticsearch.track_total_hits"),
+        use_dfs_query_then_fetch=_require_bool(
+            es_raw.get("use_dfs_query_then_fetch"), "elasticsearch.use_dfs_query_then_fetch"
+        ),
     )
 
     limits_raw = _require_dict(raw.get("limits"), "limits")

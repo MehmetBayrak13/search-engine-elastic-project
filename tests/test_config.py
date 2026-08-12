@@ -25,6 +25,7 @@ def _minimal_search_config(**overrides):
             "search_timeout_seconds": 20,
             "autocomplete_timeout_seconds": 10,
             "track_total_hits": True,
+            "use_dfs_query_then_fetch": True,
         },
         "limits": {
             "result_size": 20,

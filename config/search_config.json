@@ -4,7 +4,8 @@
     "autocomplete_indices": ["amazon-products-autocomplete-000001", "amazon-products-autocomplete-000002"],
     "search_timeout_seconds": 20,
     "autocomplete_timeout_seconds": 10,
-    "track_total_hits": true
+    "track_total_hits": true,
+    "use_dfs_query_then_fetch": true
   },
   "limits": {
     "result_size": 20,

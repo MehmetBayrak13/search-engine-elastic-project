@@ -1049,7 +1049,7 @@ def build_search_query(
 # ---------------------------------------------------------------------------
 # Elasticsearch isteği
 # ---------------------------------------------------------------------------
-def _post_search(payload: dict, timeout: int = 20, index: str = None):
+def _post_search(payload: dict, timeout: int = 20, index: str = None, search_type: str | None = None):
     """
     Verilen sorgu gövdesini belirtilen index üzerinde Elastic Cloud'a gönderir;
     ortak HTTP ve hata yönetimini tek yerde toplar. Varsayılan index normal
@@ -1057,6 +1057,13 @@ def _post_search(payload: dict, timeout: int = 20, index: str = None):
 
     `autocomplete_service` bu fonksiyonu modül referansıyla
     (`search_service._post_search(...)`) çağırır — bkz. modül docstring'i.
+
+    `search_type`: verilirse `?search_type=...` query string parametresi
+    olarak eklenir (ör. `dfs_query_then_fetch` — bkz. `search_products`'taki
+    kullanım ve `ElasticsearchConfig.use_dfs_query_then_fetch` yorumu).
+    Varsayılan `None` iken ES'in kendi varsayılanı (`query_then_fetch`)
+    kullanılır — aggregation-only (kategori keşfi) ve autocomplete çağrıları
+    bunu hiç geçirmez, davranışları değişmez.
 
     Dönüş: (data_dict, hata_mesaji). Hata varsa data_dict None döner.
     """
@@ -1067,6 +1074,7 @@ def _post_search(payload: dict, timeout: int = 20, index: str = None):
         "Authorization": f"ApiKey {ES_API_KEY}",
         "Content-Type": "application/json",
     }
+    params = {"search_type": search_type} if search_type else None
 
     try:
         response = requests.post(
@@ -1074,6 +1082,7 @@ def _post_search(payload: dict, timeout: int = 20, index: str = None):
             headers=headers,
             json=payload,
             timeout=timeout,
+            params=params,
         )
     except requests.exceptions.ConnectionError:
         return None, CONFIG.ui.message("connection_error")
@@ -1187,7 +1196,11 @@ def search_products(
             has_next=False,
         )
 
-    data, error = _post_search(payload, timeout=cfg.elasticsearch.search_timeout_seconds)
+    data, error = _post_search(
+        payload,
+        timeout=cfg.elasticsearch.search_timeout_seconds,
+        search_type="dfs_query_then_fetch" if cfg.elasticsearch.use_dfs_query_then_fetch else None,
+    )
     if error:
         return SearchResult(
             hits=None,

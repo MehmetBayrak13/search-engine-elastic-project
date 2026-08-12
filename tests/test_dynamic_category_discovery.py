@@ -58,8 +58,8 @@ def _mock_post_search(monkeypatch, response_by_index=None, default=(({}), None))
     """`app.search_service._post_search`ü mock'lar ve yapılan çağrıları kaydeder."""
     calls = []
 
-    def fake_post_search(payload, timeout=20, index=None):
-        calls.append({"payload": payload, "timeout": timeout, "index": index})
+    def fake_post_search(payload, timeout=20, index=None, search_type=None):
+        calls.append({"payload": payload, "timeout": timeout, "index": index, "search_type": search_type})
         if response_by_index and index in response_by_index:
             return response_by_index[index]
         return default
