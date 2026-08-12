@@ -38,11 +38,20 @@ INTENT_RULES = search_service.INTENT_RULES
 
 app = FastAPI(title="Ürün Arama API")
 
-_allowed_origins = [
+_PRODUCTION_ORIGINS = [
+    "https://mehmetbayrak.ai",
+    "https://www.mehmetbayrak.ai",
+]
+_env_origins = [
     origin.strip()
     for origin in os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(",")
     if origin.strip()
 ]
+# Prod origin'ler ALLOWED_ORIGINS ortam değişkeninden bağımsız olarak her zaman
+# eklenir (Render env var'ı değiştirilmeden de production frontend çalışsın diye)
+# — mevcut env-var kaynaklı (ör. local dev) origin'ler korunur, dict.fromkeys
+# yalnızca duplicate'leri sırayı bozmadan eler.
+_allowed_origins = list(dict.fromkeys(_env_origins + _PRODUCTION_ORIGINS))
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,

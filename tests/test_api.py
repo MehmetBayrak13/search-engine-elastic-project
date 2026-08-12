@@ -19,7 +19,7 @@ client = TestClient(app)
 
 
 def _mock_post_search(monkeypatch, response):
-    def fake_post_search(payload, timeout=20, index=None):
+    def fake_post_search(payload, timeout=20, index=None, search_type=None):
         return response
 
     monkeypatch.setattr(search_service, "_post_search", fake_post_search)
@@ -55,6 +55,18 @@ def test_config_shape():
     for key in ("hero", "labels", "help_text", "messages", "autocomplete_ui", "limits", "pagination"):
         assert key in body
     assert "search_button" in body["labels"]
+
+
+@pytest.mark.parametrize("path", ["/api/health", "/api/config"])
+@pytest.mark.parametrize("origin", ["https://mehmetbayrak.ai", "https://www.mehmetbayrak.ai"])
+def test_production_origin_allowed_by_cors(path, origin):
+    response = client.get(path, headers={"Origin": origin})
+    assert response.headers.get("access-control-allow-origin") == origin
+
+
+def test_unknown_origin_not_echoed_by_cors():
+    response = client.get("/api/health", headers={"Origin": "https://evil.example.com"})
+    assert "access-control-allow-origin" not in response.headers
 
 
 def test_search_requires_query():
