@@ -120,6 +120,7 @@ def expand_multilingual_query(query_text: str, translations=None) -> dict:
         "normalized_query": str,
         "phrase_translations": [str, ...],
         "token_translations": [str, ...],
+        "token_translation_query": str,
         "expanded_queries": [str, ...],
         "used_translation": bool,
       }
@@ -132,6 +133,7 @@ def expand_multilingual_query(query_text: str, translations=None) -> dict:
 
     phrase_translations: list[str] = []
     token_translations: list[str] = []
+    token_translation_query = ""
 
     if translations and normalized:
         phrase_hits = translations.phrases.get(normalized)
@@ -152,6 +154,27 @@ def expand_multilingual_query(query_text: str, translations=None) -> dict:
                     break
             token_translations = token_translations[:max_variants]
 
+            # `token_translation_query` yalnızca EN AZ BİR kelime gerçekten
+            # çevrildiyse kurulur — aksi halde (tamamen İngilizce/çevrilemeyen
+            # bir sorgu) `normalized`in birebir kopyası olur ve gereksiz,
+            # yinelenen bir multi_match maddesi eklenir.
+            # `token_translations` yalnızca ÇEVRİLEBİLEN kelimeleri taşır —
+            # sözlükte olmayan kelimeler (ör. marka adı "adidas") sessizce
+            # atlanır. `_build_translation_lexical_queries` tarihsel olarak
+            # bu listeyi TEK BAŞINA sorgu metni yapıyordu (`" ".join(...)`),
+            # yani "adidas ayakkabı" gibi bir sorguda çevrilen multi_match
+            # yalnızca "shoe shoes" arardı — "adidas" kısıtı tamamen kaybolur,
+            # sonuç sayısı DARALMAK yerine GENİŞLERDİ (bkz. canlı cluster
+            # doğrulaması: "adidas ayakkabı" 4735 > "adidas" 3872). Burada
+            # sözlükte olmayan her kelime OLDUĞU GİBİ (Türkçe) korunarak tam
+            # bir cümle yeniden kurulur — böylece çeviri alternatifi de
+            # "adidas" kısıtını taşır.
+            if token_translations:
+                reconstructed = [
+                    (translations.terms.get(token) or (token,))[0] for token in normalized.split()
+                ]
+                token_translation_query = " ".join(reconstructed)
+
     expanded_queries = [original]
     if normalized and normalized != original.casefold():
         expanded_queries.append(normalized)
@@ -164,6 +187,7 @@ def expand_multilingual_query(query_text: str, translations=None) -> dict:
         "normalized_query": normalized,
         "phrase_translations": phrase_translations,
         "token_translations": token_translations,
+        "token_translation_query": token_translation_query,
         "expanded_queries": expanded_queries,
         "used_translation": bool(phrase_translations or token_translations),
     }
@@ -193,10 +217,18 @@ def _build_translation_lexical_queries(query_text: str) -> list[dict]:
             }
         })
 
-    if expansion["token_translations"]:
+    if expansion["token_translation_query"]:
         queries.append({
             "multi_match": {
-                "query": " ".join(expansion["token_translations"]),
+                # `token_translation_query`, sözlükte çevirisi olmayan
+                # kelimeleri (ör. marka adı "adidas") OLDUĞU GİBİ korur —
+                # yalnızca çevrilen kelimelerin ("shoe"/"shoes") bag'i
+                # KULLANILMAZ, aksi halde "adidas ayakkabı" gibi bir sorguda
+                # bu madde yalnızca "shoe shoes" arar, "adidas" kısıtı
+                # tamamen kaybolur (bkz. expand_multilingual_query docstring'i
+                # — canlı cluster'da doğrulandı: sonuç sayısı DARALMAK yerine
+                # GENİŞLERDİ, 3872 → 4735).
+                "query": expansion["token_translation_query"],
                 "type": "best_fields",
                 # operator eksikse ES varsayılanı "or" olur — tek bir çeviri
                 # token'ının (ör. yalnızca "wireless") herhangi bir alanda tek
@@ -361,9 +393,18 @@ def discover_category_intent(
     if expansion["normalized_query"] and expansion["normalized_query"] != expansion["original_query"]:
         extra_texts.append(expansion["normalized_query"])
 
-    top_translations = expansion["phrase_translations"] or expansion["token_translations"]
-    if top_translations:
-        extra_texts.append(top_translations[0])
+    # `token_translations` yerine `token_translation_query` kullanılır —
+    # yalnızca çevrilen kelimelerin bag'i (ör. "shoe") sözlükte olmayan
+    # kelimeleri (ör. "adidas") kaybeder ve aggregation'ı marka-agnostik
+    # hale getirir (bkz. expand_multilingual_query docstring'i, aynı sınıf
+    # hata `_build_translation_lexical_queries`'te).
+    top_translation = (
+        expansion["phrase_translations"][0]
+        if expansion["phrase_translations"]
+        else expansion["token_translation_query"]
+    )
+    if top_translation:
+        extra_texts.append(top_translation)
 
     aggregations, error = fetch_aggregations(query_text, tuple(extra_texts))
     if error or not aggregations:
