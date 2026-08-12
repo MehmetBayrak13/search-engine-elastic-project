@@ -163,6 +163,18 @@ export default function App() {
     }
   };
 
+  const handleGoHome = () => {
+    setSearchBoxValue('');
+    setSearchBoxRevision((r) => r + 1);
+    setQueryText('');
+    setSuggestions([]);
+    setSearchError(null);
+    setResult(null);
+    setCurrentPage(1);
+    setSortMode('relevance');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
   const handlePrevPage = () => {
     const page = Math.max(1, currentPage - 1);
     setCurrentPage(page);
@@ -196,7 +208,7 @@ export default function App() {
 
   return (
     <div className="page">
-      <Topbar hero={config.hero} esOk={esOk} statusLabels={config.labels} />
+      <Topbar hero={config.hero} esOk={esOk} statusLabels={config.labels} onGoHome={handleGoHome} />
 
       <Hero hero={config.hero}>
         <div className="search-row">
@@ -233,7 +245,7 @@ export default function App() {
         )}
       </Hero>
 
-      <div className="layout">
+      <div className={`layout${sidebarOpen ? '' : ' sidebar-hidden'}`}>
         <div className={`sidebar-shell${sidebarOpen ? '' : ' is-collapsed'}`} aria-hidden={!sidebarOpen}>
           <SidebarSettings
             config={config}

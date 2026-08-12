@@ -1,9 +1,9 @@
-export default function Topbar({ hero, esOk, statusLabels }) {
+export default function Topbar({ hero, esOk, statusLabels, onGoHome }) {
   return (
     <header className="topbar">
-      <div className="brand">
+      <button type="button" className="brand" onClick={onGoHome} aria-label="Anasayfaya dön">
         <span className="brand-mark">{hero?.logo || '🛍️'}</span> Ürün Arama
-      </div>
+      </button>
       <div className="topbar-status">
         <span className={`status-pill${esOk ? '' : ' status-pill-pending'}`}>
           <span className="dot" />
