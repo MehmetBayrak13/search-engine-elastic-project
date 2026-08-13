@@ -196,16 +196,22 @@ def test_field_relevance_disabled_by_enable_multi_match_toggle():
     # exact_asin is kept ON (identical in both calls) as a stable baseline
     # clause so turning field_relevance off doesn't trip the unrelated
     # "zero lexical methods -> match_none" safety net, which would remove
-    # the `bool` key this test asserts on.
+    # the `bool` key this test asserts on. Query text is "gadget" rather
+    # than the more common "kamera" placeholder used elsewhere in this file
+    # -- "kamera" now has a dictionary translation (config/query_translations.json:
+    # "kamera" -> "camera"), and `_build_translation_lexical_queries` reads
+    # the module-global `search_service.CONFIG` directly (not the `config=`
+    # override below), so it can't be suppressed per-call here; "gadget" has
+    # no entry in either query_translations.json or synonyms.json.
     no_title_ranking_cfg = replace(
         app.CONFIG, title_ranking=replace(app.CONFIG.title_ranking, enabled=False)
     )
     with_it = app.build_search_query(
-        "kamera", enable_phrase=False, enable_fuzzy=False,
+        "gadget", enable_phrase=False, enable_fuzzy=False,
         apply_intent_reranking=False, config=no_title_ranking_cfg,
     )
     without_it = app.build_search_query(
-        "kamera", enable_phrase=False, enable_multi_match=False, enable_fuzzy=False,
+        "gadget", enable_phrase=False, enable_multi_match=False, enable_fuzzy=False,
         apply_intent_reranking=False, config=no_title_ranking_cfg,
     )
     with_count = len(_innermost_query(with_it["query"])["bool"]["must"][0]["bool"]["should"])
@@ -266,6 +272,23 @@ def test_synonym_expansion_produces_lexical_multi_match_clause():
     ]
     assert len(synonym_clauses) == 1
     assert synonym_clauses[0]["operator"] == "and"
+
+
+def test_irregular_plural_synonym_expansion_works_without_reindex():
+    # "knife"/"knives" gibi düzensiz çoğullar Elasticsearch analyzer'ında
+    # stemming olmadan eşleşmez (bkz. İngilizce stemming/reindex tartışması);
+    # bu tip çiftler reindex gerektirmeden synonyms.json'a eklenerek
+    # query-time'da kapatılabiliyor.
+    expansion = app.expand_multilingual_query("kitchen knife")
+    assert expansion["token_translation_query"] == "kitchen knives"
+
+
+def test_new_tr_redirect_reaches_existing_color_translation():
+    # "bordo" (bordeaux/maroon) query_translations.json'da bir anahtar
+    # DEĞİL -- synonyms.json'daki tr_redirects üzerinden zaten var olan
+    # "kırmızı" -> "red" çevirisine yönlenmeli.
+    expansion = app.expand_multilingual_query("bordo çanta")
+    assert expansion["token_translation_query"] == "red bag"
 
 
 def test_field_relevance_canonical_field_matches_share_one_canonical_key():
