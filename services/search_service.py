@@ -1001,6 +1001,7 @@ def build_search_query(
     apply_intent_reranking: bool = True,
     intent_signals: "IntentSignals | None" = None,
     sort: str = "relevance",
+    min_score: float | None = None,
     *,
     config: "AppConfig | None" = None,
     include_relevance_debug: bool = False,
@@ -1041,6 +1042,11 @@ def build_search_query(
       eklenmez — ES'in kendi `_score` (relevance) sıralaması geçerli olur.
       Bilinen bir değerse `_score` her zaman ikincil tie-break kriteri olarak
       kalır.
+
+    `min_score`: verilirse ES payload'una `min_score` filtresi olarak eklenir
+      (bkz. AlternateSortConfig docstring'i — `search_products`, sort !=
+      relevance iken bunu bir "probe" isteğiyle öğrenip buraya enjekte eder;
+      bu fonksiyon SAF kaldığı için değeri hesaplamaz, yalnızca kullanır).
 
     Böylece kategori boostları tek başına belge döndürmez; ürün önce lexical
     (veya çevrilmiş bir lexical alternatif) olarak eşleşmek zorundadır.
@@ -1250,6 +1256,12 @@ def build_search_query(
         payload["sort"] = _rating_sort_clause(cfg)
     elif sort in _SORT_CLAUSES:
         payload["sort"] = _SORT_CLAUSES[sort]
+    if min_score is not None:
+        # bkz. AlternateSortConfig docstring'i — `sort != relevance` iken
+        # `_score` yalnızca tie-break olduğu için zayıf/tesadüfi eşleşmeler
+        # (tek alanda geçen bir değinme) fiyat/puan sıralamasında rahatlıkla
+        # 1. sıraya çıkabilir; bu taban değeri onları tamamen eler.
+        payload["min_score"] = min_score
     return payload
 
 
@@ -1325,6 +1337,42 @@ def _post_search(payload: dict, timeout: int = 20, index: str = None, search_typ
         return None, CONFIG.ui.message("response_decode_error")
 
 
+def _probe_max_relevance_score(
+    query_text: str,
+    enable_phrase: bool,
+    enable_multi_match: bool,
+    enable_fuzzy: bool,
+    enable_exact_asin: bool,
+    intent_signals: "IntentSignals",
+    cfg: "AppConfig",
+) -> float | None:
+    """`sort != "relevance"` iken alaka tabanı (bkz. `AlternateSortConfig`)
+    için bu SORGUYA özgü gerçek maksimum relevance skorunu ucuz (size=1),
+    `sort=relevance` bir "probe" isteğiyle öğrenir. Aynı lexical/intent
+    sinyalleriyle (`intent_signals` yeniden hesaplanmaz, çağıran taraftan
+    aktarılır) inşa edilir ki max_score anlamlı/karşılaştırılabilir kalsın.
+    İstek başarısız olursa (bkz. `_post_search`) `None` döner — taban
+    sessizce atlanır, normal aramayı ASLA engellemez."""
+    probe_payload = build_search_query(
+        query_text,
+        enable_phrase=enable_phrase,
+        enable_multi_match=enable_multi_match,
+        enable_fuzzy=enable_fuzzy,
+        enable_exact_asin=enable_exact_asin,
+        page=1,
+        page_size=1,
+        track_total_hits=False,
+        intent_signals=intent_signals,
+        sort="relevance",
+        config=cfg,
+    )
+    data, error = _post_search(probe_payload, timeout=cfg.elasticsearch.search_timeout_seconds)
+    if error or not data:
+        return None
+    max_score = data.get("hits", {}).get("max_score")
+    return float(max_score) if max_score is not None else None
+
+
 def search_products(
     query_text: str,
     enable_phrase: bool = True,
@@ -1361,6 +1409,13 @@ def search_products(
     (`pagination_limit_error`) `SearchResult(error=...)` döner — bu bir
     çökme değil, kontrollü bir sınırdır.
 
+    `sort != "relevance"` ve `alternate_sort.enabled` iken, asıl istekten
+    ÖNCE ucuz bir "probe" isteğiyle (bkz. `_probe_max_relevance_score`) bu
+    sorgunun gerçek maksimum relevance skorunu öğrenip `min_score` filtresi
+    olarak enjekte eder — aksi halde `_score` yalnızca tie-break olduğu için
+    zayıf/tesadüfi tek-alan eşleşmeleri fiyat/puan sıralamasında 1. sıraya
+    çıkabilir (bkz. `AlternateSortConfig` docstring'i).
+
     Dönüş: `SearchResult`. Hata varsa `hits` None döner.
     """
     cfg = config or CONFIG
@@ -1371,6 +1426,16 @@ def search_products(
     intent_signals = resolve_intent_signals(
         query_text, include_dynamic=True, fetch_aggregations=fetch_aggregations, config=cfg
     )
+
+    min_score = None
+    if sort != "relevance" and cfg.alternate_sort.enabled:
+        probe_max_score = _probe_max_relevance_score(
+            query_text, enable_phrase, enable_multi_match, enable_fuzzy, enable_exact_asin,
+            intent_signals, cfg,
+        )
+        if probe_max_score is not None:
+            min_score = probe_max_score * cfg.alternate_sort.min_score_ratio
+
     try:
         payload = build_search_query(
             query_text,
@@ -1383,6 +1448,7 @@ def search_products(
             track_total_hits=True,
             intent_signals=intent_signals,
             sort=sort,
+            min_score=min_score,
             config=cfg,
             include_relevance_debug=include_relevance_debug,
         )

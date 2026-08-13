@@ -801,3 +801,13 @@ def test_sort_modes_exposes_relevance_and_all_sort_clauses():
     assert "price-asc" in SORT_MODES
     assert "price-desc" in SORT_MODES
     assert "rating" in SORT_MODES
+
+
+def test_min_score_omitted_by_default():
+    payload = app.build_search_query("kamera")
+    assert "min_score" not in payload
+
+
+def test_min_score_included_when_provided():
+    payload = app.build_search_query("kamera", min_score=42.5)
+    assert payload["min_score"] == 42.5

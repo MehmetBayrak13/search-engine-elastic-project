@@ -97,6 +97,10 @@
     "minimum_votes": 50,
     "prior_rating": 3.5
   },
+  "alternate_sort": {
+    "enabled": true,
+    "min_score_ratio": 0.35
+  },
   "title_ranking": {
     "enabled": true,
     "exact_field": "title.keyword",

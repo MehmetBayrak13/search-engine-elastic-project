@@ -293,6 +293,35 @@ class RatingSortConfig:
 
 
 @dataclass(frozen=True)
+class AlternateSortConfig:
+    """`sort` `"relevance"` DIŞINDA bir değere (price-asc/price-desc/rating)
+    ayarlandığında, bir alaka (relevance) tabanı uygular. Sorun: `sort`
+    devreye girdiğinde `_score` yalnızca eşitlik bozucu (tie-break) olur —
+    zayıf/tesadüfi bir eşleşme (ör. bir oto akü şarj cihazının açıklamasında
+    geçen "bu ürün kablosuz kulaklıkla uyumlu değildir" gibi TEK alanlık bir
+    değinme) puanı yüksekse rahatlıkla 1. sıraya çıkabilir — halbuki relevance
+    sıralamasında BM25 zaten onu çok gerilere atardı (bkz. canlı cluster
+    ölçümü: gerçek "wireless headphones" eşleşmeleri skor 600-1300 aralığında,
+    tesadüfi tek-alan eşleşmeleri 14-180 aralığında kalıyor — net bir ayrım
+    var). `field_consensus` (kaç FARKLI alanda eşleştiği) bu ayrımı GÜVENİLİR
+    biçimde yapamıyor — gerçek eşleşmelerin çoğu da yalnızca TEK alanda
+    (`operator: and` per-field kısıtı nedeniyle) eşleşiyor; bu yüzden ayrım
+    `_score`'un kendisine (mutlak değil, bu SORGUYA özgü göreli) dayanmalı.
+
+    `search_products`, `sort != "relevance"` iken önce KÜÇÜK bir "probe"
+    isteğiyle (aynı lexical/intent sorgusu, `sort=relevance`, `size=1`) o
+    sorgunun gerçek maksimum relevance skorunu öğrenir, sonra asıl isteğe
+    `min_score = max_score * min_score_ratio` filtresini ekler — yalnızca bu
+    tabanın altındaki (muhtemelen tesadüfi) eşleşmeler tamamen elenir, geri
+    kalanlar seçilen alana göre sıralanır. Probe isteği başarısız olursa
+    (bkz. `search_products`) taban sessizce atlanır — normal aramayı ASLA
+    engellemez, yalnızca ekstra bir hassasiyet katmanıdır."""
+
+    enabled: bool
+    min_score_ratio: float
+
+
+@dataclass(frozen=True)
 class TitleRankingConfig:
     """Title alanı için katmanlı skor ayarları. Yalnızca burada tanımlı iki
     YENİ katmanı (exact, prefix) kontrol eder — phrase/normal/fuzzy
@@ -493,6 +522,7 @@ class AppConfig:
     quality_ranking: QualityRankingConfig
     popularity_ranking: PopularityRankingConfig
     rating_sort: RatingSortConfig
+    alternate_sort: AlternateSortConfig
     title_ranking: TitleRankingConfig
     intent_ranking: IntentRankingConfig
     field_relevance: FieldRelevanceConfig
@@ -714,6 +744,19 @@ def _build_rating_sort(raw: Any, context: str) -> RatingSortConfig:
     )
 
 
+def _build_alternate_sort(raw: Any, context: str) -> AlternateSortConfig:
+    raw = _require_dict(raw, context)
+    min_score_ratio = _require_positive_number(
+        raw.get("min_score_ratio"), f"{context}.min_score_ratio", allow_zero=True
+    )
+    if min_score_ratio > 1:
+        raise ConfigError(f"{context}.min_score_ratio 0-1 aralığında olmalı (alınan: {min_score_ratio!r}).")
+    return AlternateSortConfig(
+        enabled=_require_bool(raw.get("enabled"), f"{context}.enabled"),
+        min_score_ratio=min_score_ratio,
+    )
+
+
 def _build_pagination(raw: Any, context: str) -> PaginationConfig:
     raw = _require_dict(raw, context)
     page_size = _require_positive_int(raw.get("page_size"), f"{context}.page_size")
@@ -892,6 +935,7 @@ def load_search_config(path: Path = SEARCH_CONFIG_PATH) -> AppConfig:
     quality_ranking = _build_quality_ranking(raw.get("quality_ranking"), "quality_ranking")
     popularity_ranking = _build_popularity_ranking(raw.get("popularity_ranking"), "popularity_ranking")
     rating_sort = _build_rating_sort(raw.get("rating_sort"), "rating_sort")
+    alternate_sort = _build_alternate_sort(raw.get("alternate_sort"), "alternate_sort")
     title_ranking = _build_title_ranking(raw.get("title_ranking"), "title_ranking")
     intent_ranking = _build_intent_ranking(raw.get("intent_ranking"), "intent_ranking")
     field_relevance = _build_field_relevance(raw.get("field_relevance"), "field_relevance")
@@ -936,6 +980,7 @@ def load_search_config(path: Path = SEARCH_CONFIG_PATH) -> AppConfig:
         quality_ranking=quality_ranking,
         popularity_ranking=popularity_ranking,
         rating_sort=rating_sort,
+        alternate_sort=alternate_sort,
         title_ranking=title_ranking,
         intent_ranking=intent_ranking,
         field_relevance=field_relevance,

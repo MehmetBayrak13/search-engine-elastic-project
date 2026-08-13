@@ -95,6 +95,10 @@ def _minimal_search_config(**overrides):
             "minimum_votes": 50,
             "prior_rating": 4.0,
         },
+        "alternate_sort": {
+            "enabled": True,
+            "min_score_ratio": 0.25,
+        },
         "pagination": {
             "enabled": True,
             "page_size": 20,
@@ -371,6 +375,36 @@ def test_rating_sort_missing_section_is_rejected(tmp_path):
     path = _write_json(tmp_path / "search_config.json", data)
     with pytest.raises(ConfigError):
         load_search_config(path)
+
+
+def test_alternate_sort_loads_from_default_repo_config():
+    app_config = load_search_config()
+    assert app_config.alternate_sort.enabled is True
+    assert 0 <= app_config.alternate_sort.min_score_ratio <= 1
+
+
+def test_alternate_sort_missing_section_is_rejected(tmp_path):
+    data = _minimal_search_config()
+    del data["alternate_sort"]
+    path = _write_json(tmp_path / "search_config.json", data)
+    with pytest.raises(ConfigError):
+        load_search_config(path)
+
+
+def test_alternate_sort_ratio_above_one_is_rejected(tmp_path):
+    data = _minimal_search_config()
+    data["alternate_sort"]["min_score_ratio"] = 1.5
+    path = _write_json(tmp_path / "search_config.json", data)
+    with pytest.raises(ConfigError):
+        load_search_config(path)
+
+
+def test_alternate_sort_ratio_zero_is_allowed(tmp_path):
+    data = _minimal_search_config()
+    data["alternate_sort"]["min_score_ratio"] = 0
+    path = _write_json(tmp_path / "search_config.json", data)
+    app_config = load_search_config(path)
+    assert app_config.alternate_sort.min_score_ratio == 0
 
 
 def test_pagination_loads_from_default_repo_config():
