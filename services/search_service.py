@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING
 
 import requests
 
-from config import ConfigError, load_intent_rules, load_search_config, load_translations
+from config import ConfigError, load_intent_rules, load_search_config, load_synonyms, load_translations
 from services import intent_service
 from services.intent_service import IntentSignals
 from services.search_models import PaginationLimitError, SearchResult
@@ -40,6 +40,7 @@ __all__ = [
     "CONFIG",
     "CONFIG_ERROR",
     "TRANSLATIONS",
+    "SYNONYMS",
     "INTENT_RULES",
     "ES_URL",
     "ES_API_KEY",
@@ -74,10 +75,12 @@ try:
     CONFIG = load_search_config()
     INTENT_RULES = load_intent_rules()
     TRANSLATIONS = load_translations()
+    SYNONYMS = load_synonyms()
 except ConfigError as error:
     CONFIG = None
     INTENT_RULES = {}
     TRANSLATIONS = None
+    SYNONYMS = None
     CONFIG_ERROR = str(error)
 
 INDEX_NAME = CONFIG.elasticsearch.search_index_expr if CONFIG else ""
@@ -106,14 +109,46 @@ def _normalize_query_text(query_text: str) -> str:
     return " ".join((query_text or "").casefold().split())
 
 
-def expand_multilingual_query(query_text: str, translations=None) -> dict:
-    """
-    Türkçe bir sorguyu, config/query_translations.json sözlüğünü kullanarak
-    olası İngilizce karşılıklarına genişletir. Elasticsearch'e istek atmaz —
-    saf (pure) ve test edilebilir bir fonksiyondur.
+def _resolve_token_variants(token: str, translations, synonyms) -> tuple[str, ...]:
+    """Tek bir kelime için (öncelik sırasıyla) dener:
+      1) `synonyms.tr_redirects` ile kanonik bir Türkçe kelimeye yönlenip
+         `translations.terms`ten çeviri (ör. "pabuç" -> "ayakkabı" -> "shoe").
+      2) Doğrudan `translations.terms`ten TR->EN çeviri (mevcut davranış).
+      3) `synonyms.en_synonyms`den doğrudan İngilizce eş anlamlı genişletme
+         (ör. "sneakers" -> "trainers") — katalog İngilizce olduğu için
+         çeviriye ihtiyaç duymaz, aynı dilde ek arama varyantıdır.
+    Hiçbiri yoksa boş tuple döner (token OLDUĞU GİBİ korunur — bkz.
+    expand_multilingual_query'deki "adidas" örneği)."""
+    if synonyms and synonyms.tr_redirects.get(token):
+        redirected = synonyms.tr_redirects[token]
+        variants = translations.terms.get(redirected, ()) if translations else ()
+        if variants:
+            return variants
+    if translations:
+        variants = translations.terms.get(token, ())
+        if variants:
+            return variants
+    if synonyms:
+        variants = synonyms.en_synonyms.get(token, ())
+        if variants:
+            return variants
+    return ()
 
-    Öncelik: tam ifade çevirisi > kelime bazlı çeviri. Sözlükte eşleşme
-    yoksa yalnızca orijinal sorgu ile devam edilir (fallback).
+
+def expand_multilingual_query(query_text: str, translations=None, synonyms=None) -> dict:
+    """
+    Bir sorguyu hem diller arası (Türkçe -> İngilizce, `query_translations.json`)
+    hem de aynı-dil eş anlamlı (`synonyms.json`) genişletmelere tabi tutar.
+    Elasticsearch'e istek atmaz — saf (pure) ve test edilebilir bir fonksiyondur.
+
+    Öncelik: tam ifade çevirisi > kelime bazlı çeviri/eş anlamlı. Sözlükte
+    eşleşme yoksa yalnızca orijinal sorgu ile devam edilir (fallback).
+
+    Kelime bazlı genişletme `_resolve_token_variants` üzerinden hem TR->EN
+    çeviriyi HEM DE aynı-dil eş anlamlıyı (TR yönlendirme + İngilizce
+    doğrudan eş anlamlı) TEK bir akışta birleştirir — bu yüzden
+    `token_translations`/`token_translation_query` isimleri korunsa da artık
+    yalnızca "çeviri" değil, eş anlamlı sonuçları da içerir.
 
     Dönüş:
       {
@@ -127,6 +162,7 @@ def expand_multilingual_query(query_text: str, translations=None) -> dict:
       }
     """
     translations = translations if translations is not None else TRANSLATIONS
+    synonyms = synonyms if synonyms is not None else SYNONYMS
     original = query_text or ""
     normalized = _normalize_query_text(original)
 
@@ -136,8 +172,8 @@ def expand_multilingual_query(query_text: str, translations=None) -> dict:
     token_translations: list[str] = []
     token_translation_query = ""
 
-    if translations and normalized:
-        phrase_hits = translations.phrases.get(normalized)
+    if (translations or synonyms) and normalized:
+        phrase_hits = translations.phrases.get(normalized) if translations else None
         if phrase_hits:
             for variant in phrase_hits:
                 if variant not in phrase_translations:
@@ -145,10 +181,10 @@ def expand_multilingual_query(query_text: str, translations=None) -> dict:
                 if len(phrase_translations) >= max_variants:
                     break
 
-        # Kelime bazlı çeviri yalnızca tam ifade eşleşmesi yoksa denenir.
+        # Kelime bazlı çeviri/eş anlamlı yalnızca tam ifade eşleşmesi yoksa denenir.
         if not phrase_translations:
             for token in normalized.split():
-                for variant in translations.terms.get(token, ()):
+                for variant in _resolve_token_variants(token, translations, synonyms):
                     if variant not in token_translations:
                         token_translations.append(variant)
                 if len(token_translations) >= max_variants:
@@ -156,23 +192,25 @@ def expand_multilingual_query(query_text: str, translations=None) -> dict:
             token_translations = token_translations[:max_variants]
 
             # `token_translation_query` yalnızca EN AZ BİR kelime gerçekten
-            # çevrildiyse kurulur — aksi halde (tamamen İngilizce/çevrilemeyen
-            # bir sorgu) `normalized`in birebir kopyası olur ve gereksiz,
-            # yinelenen bir multi_match maddesi eklenir.
-            # `token_translations` yalnızca ÇEVRİLEBİLEN kelimeleri taşır —
-            # sözlükte olmayan kelimeler (ör. marka adı "adidas") sessizce
-            # atlanır. `_build_translation_lexical_queries` tarihsel olarak
-            # bu listeyi TEK BAŞINA sorgu metni yapıyordu (`" ".join(...)`),
-            # yani "adidas ayakkabı" gibi bir sorguda çevrilen multi_match
-            # yalnızca "shoe shoes" arardı — "adidas" kısıtı tamamen kaybolur,
-            # sonuç sayısı DARALMAK yerine GENİŞLERDİ (bkz. canlı cluster
-            # doğrulaması: "adidas ayakkabı" 4735 > "adidas" 3872). Burada
-            # sözlükte olmayan her kelime OLDUĞU GİBİ (Türkçe) korunarak tam
-            # bir cümle yeniden kurulur — böylece çeviri alternatifi de
-            # "adidas" kısıtını taşır.
+            # çevrildiyse/genişletildiyse kurulur — aksi halde (tamamen
+            # değişmeyen bir sorgu) `normalized`in birebir kopyası olur ve
+            # gereksiz, yinelenen bir multi_match maddesi eklenir.
+            # `token_translations` yalnızca ÇÖZÜLEBİLEN kelimeleri taşır —
+            # sözlükte/eş anlamlı listesinde olmayan kelimeler (ör. marka adı
+            # "adidas") sessizce atlanır. `_build_translation_lexical_queries`
+            # tarihsel olarak bu listeyi TEK BAŞINA sorgu metni yapıyordu
+            # (`" ".join(...)`), yani "adidas ayakkabı" gibi bir sorguda
+            # çevrilen multi_match yalnızca "shoe shoes" arardı — "adidas"
+            # kısıtı tamamen kaybolur, sonuç sayısı DARALMAK yerine
+            # GENİŞLERDİ (bkz. canlı cluster doğrulaması: "adidas ayakkabı"
+            # 4735 > "adidas" 3872). Burada sözlükte/eş anlamlı listesinde
+            # olmayan her kelime OLDUĞU GİBİ korunarak tam bir cümle yeniden
+            # kurulur — böylece çeviri/eş anlamlı alternatifi de "adidas"
+            # kısıtını taşır.
             if token_translations:
                 reconstructed = [
-                    (translations.terms.get(token) or (token,))[0] for token in normalized.split()
+                    (_resolve_token_variants(token, translations, synonyms) or (token,))[0]
+                    for token in normalized.split()
                 ]
                 token_translation_query = " ".join(reconstructed)
 

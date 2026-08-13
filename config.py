@@ -21,6 +21,7 @@ CONFIG_DIR = BASE_DIR / "config"
 SEARCH_CONFIG_PATH = CONFIG_DIR / "search_config.json"
 INTENT_RULES_PATH = CONFIG_DIR / "intent_rules.json"
 TRANSLATIONS_PATH = CONFIG_DIR / "query_translations.json"
+SYNONYMS_PATH = CONFIG_DIR / "synonyms.json"
 
 
 class ConfigError(Exception):
@@ -588,6 +589,29 @@ class IntentRule:
 class TranslationDictionary:
     phrases: dict[str, tuple[str, ...]] = field(default_factory=dict)
     terms: dict[str, tuple[str, ...]] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class SynonymDictionary:
+    """Aynı-dil eş anlamlı genişletme (TranslationDictionary'nin AKSİNE
+    diller arası değil — İngilizce sorguyu İngilizce alternatiflerine,
+    Türkçe bir kelimeyi zaten `query_translations.json`da tanımlı KANONİK
+    bir Türkçe kelimeye yönlendirir).
+
+    `tr_redirects`: Türkçe eş anlamlıyı (ör. "pabuç") ZATEN
+    `query_translations.json`da çeviri karşılığı olan kanonik bir Türkçe
+    kelimeye (ör. "ayakkabı") yönlendirir — YENİ bir TR->EN çeviri seti
+    gerektirmez, sadece mevcut sözlüğün kapsamını genişletir (bkz.
+    `services/search_service.py: _resolve_synonym_variants`).
+
+    `en_synonyms`: İngilizce (ya da zaten çevrilmiş) bir kelimeyi doğrudan
+    İngilizce alternatiflerine genişletir (ör. "sneakers" -> ["trainers",
+    "athletic shoes"]) — katalog zaten İngilizce olduğu için bunlar
+    doğrudan ek arama varyantı olarak kullanılır, çeviriye ihtiyaç duymaz.
+    """
+
+    tr_redirects: dict[str, str] = field(default_factory=dict)
+    en_synonyms: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
 
 # ============================================================
@@ -1191,8 +1215,34 @@ def load_translations(path: Path = TRANSLATIONS_PATH) -> TranslationDictionary:
     )
 
 
+@lru_cache(maxsize=None)
+def load_synonyms(path: Path = SYNONYMS_PATH) -> SynonymDictionary:
+    """`synonyms.json`ı okur. Dosya yoksa veya boşsa, eş anlamlı genişletme
+    yapılmadan orijinal sorguyla aramaya devam edilebilmesi için boş bir
+    sözlük döner (crash etmez) — `load_translations` ile aynı fail-safe
+    desen."""
+    raw = _load_json(path)
+    if not raw:
+        return SynonymDictionary()
+
+    tr_redirects_raw = _require_dict(raw.get("tr_redirects", {}), "synonyms.tr_redirects")
+    tr_redirects: dict[str, str] = {
+        source: _require_str(target, f"synonyms.tr_redirects.{source}")
+        for source, target in tr_redirects_raw.items()
+    }
+
+    en_synonyms_raw = _require_dict(raw.get("en_synonyms", {}), "synonyms.en_synonyms")
+    en_synonyms: dict[str, tuple[str, ...]] = {
+        source: _require_str_list(variants, f"synonyms.en_synonyms.{source}")
+        for source, variants in en_synonyms_raw.items()
+    }
+
+    return SynonymDictionary(tr_redirects=tr_redirects, en_synonyms=en_synonyms)
+
+
 def clear_config_cache() -> None:
     """Test ortamlarında farklı config dosyalarıyla yeniden yükleme yapabilmek için."""
     load_search_config.cache_clear()
     load_intent_rules.cache_clear()
     load_translations.cache_clear()
+    load_synonyms.cache_clear()

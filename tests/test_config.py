@@ -8,6 +8,7 @@ from config import (
     ConfigError,
     load_intent_rules,
     load_search_config,
+    load_synonyms,
     load_translations,
 )
 
@@ -561,6 +562,53 @@ def test_malformed_translation_rule_is_rejected(tmp_path):
     )
     with pytest.raises(ConfigError):
         load_translations(path)
+
+
+def test_empty_synonym_dictionary_is_allowed(tmp_path):
+    path = _write_json(tmp_path / "synonyms.json", {})
+    synonyms = load_synonyms(path)
+    assert synonyms.tr_redirects == {}
+    assert synonyms.en_synonyms == {}
+
+
+def test_missing_synonym_file_is_allowed(tmp_path):
+    synonyms = load_synonyms(tmp_path / "does-not-exist.json")
+    assert synonyms.tr_redirects == {}
+    assert synonyms.en_synonyms == {}
+
+
+def test_synonym_tr_redirects_load_correctly(tmp_path):
+    path = _write_json(tmp_path / "synonyms.json", {"tr_redirects": {"pabuç": "ayakkabı"}})
+    synonyms = load_synonyms(path)
+    assert synonyms.tr_redirects == {"pabuç": "ayakkabı"}
+
+
+def test_synonym_en_synonyms_load_correctly(tmp_path):
+    path = _write_json(tmp_path / "synonyms.json", {"en_synonyms": {"sneakers": ["trainers"]}})
+    synonyms = load_synonyms(path)
+    assert synonyms.en_synonyms == {"sneakers": ("trainers",)}
+
+
+def test_malformed_synonym_tr_redirect_is_rejected(tmp_path):
+    # tr_redirects değerleri TEK bir string olmalı (liste değil).
+    path = _write_json(tmp_path / "synonyms.json", {"tr_redirects": {"pabuç": ["ayakkabı"]}})
+    with pytest.raises(ConfigError):
+        load_synonyms(path)
+
+
+def test_malformed_synonym_en_entry_is_rejected(tmp_path):
+    # en_synonyms değerleri bir LİSTE olmalı (tek string değil).
+    path = _write_json(tmp_path / "synonyms.json", {"en_synonyms": {"sneakers": "trainers"}})
+    with pytest.raises(ConfigError):
+        load_synonyms(path)
+
+
+def test_default_repo_synonyms_load_successfully():
+    synonyms = load_synonyms()
+    assert synonyms.tr_redirects
+    assert synonyms.en_synonyms
+    assert synonyms.tr_redirects.get("pabuç") == "ayakkabı"
+    assert "trainers" in synonyms.en_synonyms.get("sneakers", ())
 
 
 def test_title_ranking_loads_from_default_repo_config():

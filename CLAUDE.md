@@ -184,6 +184,7 @@ Main project files:
 - `config/search_config.json`
 - `config/intent_rules.json`
 - `config/query_translations.json`
+- `config/synonyms.json`
 - `tests/`
 - `requirements.txt`
 - `README.md`
@@ -366,6 +367,7 @@ Current configuration files:
 config/search_config.json
 config/intent_rules.json
 config/query_translations.json
+config/synonyms.json
 ```
 
 `config.py` must:
@@ -864,6 +866,35 @@ Query-time translation does not require reindexing.
 Ingest-time document translation is not the default approach because millions of
 documents would need translation, storage would increase, and another large
 reindex would be required.
+
+### Same-language synonym expansion
+
+Distinct from cross-language translation above: `config/synonyms.json` expands a
+query to same-language alternatives — English to English (e.g. `sneakers` →
+`trainers`), and Turkish colloquialisms to the canonical Turkish form already
+present in `query_translations.json` (e.g. `pabuç` → `ayakkabı`, which then
+translates to `shoe` as usual). This lets a Turkish synonym reach an English
+match without a separate Turkish → English entry for every colloquial variant.
+
+Expected structure:
+
+```json
+{
+  "tr_redirects": {
+    "pabuç": "ayakkabı"
+  },
+  "en_synonyms": {
+    "sneakers": ["trainers", "athletic shoes"]
+  }
+}
+```
+
+`services/search_service.py: expand_multilingual_query` resolves both
+translation and synonym expansion through one token-resolution path
+(`_resolve_token_variants`), so brand names and other words absent from either
+dictionary are preserved unchanged in the reconstructed query — the same
+"never drop an unrecognized word" rule that applies to translation (see
+`adidas ayakkabı` example above) applies here too.
 
 ---
 
@@ -1411,6 +1442,7 @@ Configuration files required at runtime must be included in Git:
 config/search_config.json
 config/intent_rules.json
 config/query_translations.json
+config/synonyms.json
 config.py
 ```
 

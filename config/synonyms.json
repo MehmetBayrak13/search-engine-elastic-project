@@ -1,0 +1,72 @@
+{
+  "tr_redirects": {
+    "pabuç": "ayakkabı",
+    "pabucu": "ayakkabı",
+    "potin": "bot",
+    "potini": "bot",
+    "telsiz": "kablosuz",
+    "kaban": "mont",
+    "kabanı": "mont",
+    "kırmızımsı": "kırmızı"
+  },
+  "en_synonyms": {
+    "sneakers": ["trainers", "athletic shoes"],
+    "sneaker": ["trainer", "athletic shoe"],
+    "trainers": ["sneakers"],
+    "trainer": ["sneaker"],
+
+    "earbuds": ["earphones", "in-ear headphones"],
+    "earbud": ["earphone"],
+    "earphones": ["earbuds"],
+    "earphone": ["earbud"],
+    "headset": ["headphones"],
+
+    "tv": ["television"],
+    "television": ["tv"],
+
+    "phone": ["cell phone", "mobile phone", "smartphone"],
+    "mobile": ["cell phone", "smartphone"],
+    "cellphone": ["cell phone", "mobile phone"],
+
+    "laptop": ["notebook computer"],
+    "notebook": ["laptop"],
+
+    "sofa": ["couch"],
+    "couch": ["sofa"],
+
+    "fridge": ["refrigerator"],
+    "refrigerator": ["fridge"],
+
+    "flashlight": ["torch"],
+    "torch": ["flashlight"],
+
+    "vacuum": ["hoover", "vacuum cleaner"],
+    "hoover": ["vacuum", "vacuum cleaner"],
+
+    "stroller": ["pushchair", "pram"],
+    "pushchair": ["stroller"],
+
+    "diaper": ["nappy"],
+    "diapers": ["nappies"],
+    "nappy": ["diaper"],
+
+    "handbag": ["purse"],
+    "purse": ["handbag"],
+
+    "sunglasses": ["shades"],
+    "shades": ["sunglasses"],
+
+    "pants": ["trousers"],
+    "trousers": ["pants"],
+
+    "sweater": ["jumper", "pullover"],
+    "jumper": ["sweater"],
+
+    "trash": ["garbage", "waste"],
+    "garbage": ["trash", "waste"],
+
+    "cookie": ["biscuit"],
+    "cookies": ["biscuits"],
+    "biscuit": ["cookie"]
+  }
+}

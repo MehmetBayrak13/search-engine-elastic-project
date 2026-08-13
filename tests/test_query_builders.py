@@ -239,6 +239,35 @@ def test_token_translation_only_query_does_not_crash_and_uses_field_relevance_fi
     assert token_translation_clauses[0]["fields"] == app.CONFIG.field_relevance.es_fields
 
 
+def test_english_synonym_expansion_preserves_brand_name():
+    # "nike sneakers" -> "sneakers" bir İngilizce eş anlamlı anahtarı
+    # ("trainers"e genişler), "nike" sözlükte/eş anlamlı listesinde
+    # olmadığı için OLDUĞU GİBİ korunmalı (bkz. "adidas ayakkabı"
+    # regresyonuyla aynı sınıf gereksinim).
+    expansion = app.expand_multilingual_query("nike sneakers")
+    assert expansion["token_translation_query"] == "nike trainers"
+    assert "trainers" in expansion["token_translations"]
+
+
+def test_turkish_synonym_redirect_reaches_existing_translation_entry():
+    # "pabuç" query_translations.json'da bir anahtar DEĞİL -- yalnızca
+    # synonyms.json'daki tr_redirects üzerinden zaten var olan "ayakkabı"
+    # çevirisine yönlenmeli, YENİ bir çeviri seti gerektirmemeli.
+    expansion = app.expand_multilingual_query("pabuç")
+    assert expansion["token_translation_query"] == "shoe"
+
+
+def test_synonym_expansion_produces_lexical_multi_match_clause():
+    payload = app.build_search_query("sneakers", apply_intent_reranking=False)
+    should = _innermost_query(payload["query"])["bool"]["must"][0]["bool"]["should"]
+    synonym_clauses = [
+        c["multi_match"] for c in should
+        if c.get("multi_match", {}).get("query") == "trainers"
+    ]
+    assert len(synonym_clauses) == 1
+    assert synonym_clauses[0]["operator"] == "and"
+
+
 def test_field_relevance_canonical_field_matches_share_one_canonical_key():
     from services.search_service import _build_field_evidence_clauses
 
