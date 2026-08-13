@@ -322,6 +322,28 @@ class AlternateSortConfig:
 
 
 @dataclass(frozen=True)
+class AccessoryPenaltyConfig:
+    """Sorgudan BAĞIMSIZ, genel bir "bu ürün aslında bir aksesuar/yedek
+    parça mı?" sinyali. Bir ürünün title'ı `terms`den herhangi birini
+    (ör. "sticker", "case", "replacement") içeriyor AMA kullanıcının
+    sorgusu o kelimeyi HİÇ içermiyorsa, bu ürünün asıl arananın kendisi
+    değil ona ait bir aksesuar/yedek parça olma ihtimali yüksektir (ör.
+    "wireless headphones" araması bir kulaklık STICKER'ını değil gerçek
+    kulaklığı bulmalı — bkz. canlı cluster örneği: "YHC Decal Skin Sticker
+    For Beats Studio 2.0 ... Wireless Headphones" title'ında sorgu
+    kelimeleri defalarca geçtiği için BM25 skoru çok yüksek çıkıyor,
+    field_consensus/dynamic_category_penalty bunu güvenilir biçimde
+    ayıramıyor). Kullanıcı GERÇEKTEN bir aksesuar arıyorsa (ör. sorgu
+    "phone case" ise) `case` terimi kullanıcının sorgusunda zaten var
+    olduğu için ceza uygulanmaz — bu yüzden sorguya özel değil, GENEL bir
+    kuraldır (bkz. `_apply_accessory_penalty`)."""
+
+    enabled: bool
+    penalty: float
+    terms: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class TitleRankingConfig:
     """Title alanı için katmanlı skor ayarları. Yalnızca burada tanımlı iki
     YENİ katmanı (exact, prefix) kontrol eder — phrase/normal/fuzzy
@@ -523,6 +545,7 @@ class AppConfig:
     popularity_ranking: PopularityRankingConfig
     rating_sort: RatingSortConfig
     alternate_sort: AlternateSortConfig
+    accessory_penalty: AccessoryPenaltyConfig
     title_ranking: TitleRankingConfig
     intent_ranking: IntentRankingConfig
     field_relevance: FieldRelevanceConfig
@@ -757,6 +780,19 @@ def _build_alternate_sort(raw: Any, context: str) -> AlternateSortConfig:
     )
 
 
+def _build_accessory_penalty(raw: Any, context: str) -> AccessoryPenaltyConfig:
+    raw = _require_dict(raw, context)
+    penalty = _require_positive_number(raw.get("penalty"), f"{context}.penalty", allow_zero=True)
+    if penalty > 1:
+        raise ConfigError(f"{context}.penalty 0-1 aralığında olmalı (alınan: {penalty!r}).")
+    terms = _require_str_list(raw.get("terms"), f"{context}.terms", allow_empty=True)
+    return AccessoryPenaltyConfig(
+        enabled=_require_bool(raw.get("enabled"), f"{context}.enabled"),
+        penalty=penalty,
+        terms=tuple(t.casefold() for t in terms),
+    )
+
+
 def _build_pagination(raw: Any, context: str) -> PaginationConfig:
     raw = _require_dict(raw, context)
     page_size = _require_positive_int(raw.get("page_size"), f"{context}.page_size")
@@ -936,6 +972,7 @@ def load_search_config(path: Path = SEARCH_CONFIG_PATH) -> AppConfig:
     popularity_ranking = _build_popularity_ranking(raw.get("popularity_ranking"), "popularity_ranking")
     rating_sort = _build_rating_sort(raw.get("rating_sort"), "rating_sort")
     alternate_sort = _build_alternate_sort(raw.get("alternate_sort"), "alternate_sort")
+    accessory_penalty = _build_accessory_penalty(raw.get("accessory_penalty"), "accessory_penalty")
     title_ranking = _build_title_ranking(raw.get("title_ranking"), "title_ranking")
     intent_ranking = _build_intent_ranking(raw.get("intent_ranking"), "intent_ranking")
     field_relevance = _build_field_relevance(raw.get("field_relevance"), "field_relevance")
@@ -981,6 +1018,7 @@ def load_search_config(path: Path = SEARCH_CONFIG_PATH) -> AppConfig:
         popularity_ranking=popularity_ranking,
         rating_sort=rating_sort,
         alternate_sort=alternate_sort,
+        accessory_penalty=accessory_penalty,
         title_ranking=title_ranking,
         intent_ranking=intent_ranking,
         field_relevance=field_relevance,

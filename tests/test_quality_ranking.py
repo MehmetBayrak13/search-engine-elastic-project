@@ -22,17 +22,19 @@ def _with_quality_ranking(**overrides):
 @pytest.fixture(autouse=True)
 def _restore_config():
     original = app.search_service.CONFIG
-    # field_consensus (Task 3) ve popularity_ranking (varsayılan olarak AÇIK)
-    # sorguyu kendi `function_score`larıyla sarmalıyor, bu da bu dosyanın
-    # `"function_score" in payload["query"]` doğrulamalarını hangi wrapper'ı
-    # gördüğü konusunda belirsizleştirir. Burada devre dışı bırakılıyorlar ki
-    # bu dosya yalnızca quality_ranking'in kendi wrapper'ına odaklı kalsın —
-    # field_consensus/popularity_ranking'in kendi testleri sırasıyla
-    # tests/test_query_builders.py ve tests/test_popularity_ranking.py'de.
+    # field_consensus (Task 3), popularity_ranking ve accessory_penalty
+    # (hepsi varsayılan olarak AÇIK) sorguyu kendi `function_score`larıyla
+    # sarmalıyor, bu da bu dosyanın `"function_score" in payload["query"]`
+    # doğrulamalarını hangi wrapper'ı gördüğü konusunda belirsizleştirir.
+    # Burada devre dışı bırakılıyorlar ki bu dosya yalnızca quality_ranking'in
+    # kendi wrapper'ına odaklı kalsın — diğerlerinin kendi testleri sırasıyla
+    # tests/test_query_builders.py, tests/test_popularity_ranking.py ve
+    # tests/test_accessory_penalty.py'de.
     app.search_service.CONFIG = dataclasses.replace(
         original,
         field_consensus=dataclasses.replace(original.field_consensus, enabled=False),
         popularity_ranking=dataclasses.replace(original.popularity_ranking, enabled=False),
+        accessory_penalty=dataclasses.replace(original.accessory_penalty, enabled=False),
     )
     yield
     app.search_service.CONFIG = original

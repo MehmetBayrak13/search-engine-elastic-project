@@ -101,6 +101,19 @@
     "enabled": true,
     "min_score_ratio": 0.35
   },
+  "accessory_penalty": {
+    "enabled": true,
+    "penalty": 0.4,
+    "terms": [
+      "sticker", "stickers", "skin", "skins", "decal", "decals", "wrap", "wraps",
+      "case", "cases", "cover", "covers", "pouch", "pouches", "sleeve", "sleeves",
+      "protector", "protectors",
+      "replacement", "replacements", "spare part", "spare parts", "repair kit",
+      "mount", "mounts", "holder", "holders", "stand", "stands",
+      "strap", "straps", "charm", "charms",
+      "adapter", "adapters", "cable", "cables"
+    ]
+  },
   "title_ranking": {
     "enabled": true,
     "exact_field": "title.keyword",

@@ -99,6 +99,11 @@ def _minimal_search_config(**overrides):
             "enabled": True,
             "min_score_ratio": 0.25,
         },
+        "accessory_penalty": {
+            "enabled": True,
+            "penalty": 0.4,
+            "terms": ["case", "sticker"],
+        },
         "pagination": {
             "enabled": True,
             "page_size": 20,

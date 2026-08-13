@@ -23,12 +23,14 @@ def _with_popularity_ranking(**overrides):
 @pytest.fixture(autouse=True)
 def _restore_config():
     original = app.search_service.CONFIG
-    # field_consensus/quality_ranking kendi function_score sarmalayıcılarını
-    # ekliyor; bu dosyanın "en dıştaki wrapper popularity_ranking'e mi ait"
-    # doğrulamaları bulanıklaşmasın diye burada devre dışı bırakılıyor (bkz.
-    # aynı gerekçe test_quality_ranking.py'de).
+    # field_consensus/quality_ranking/accessory_penalty kendi function_score
+    # sarmalayıcılarını ekliyor; bu dosyanın "en dıştaki wrapper
+    # popularity_ranking'e mi ait" doğrulamaları bulanıklaşmasın diye burada
+    # devre dışı bırakılıyor (bkz. aynı gerekçe test_quality_ranking.py'de).
     app.search_service.CONFIG = dataclasses.replace(
-        original, field_consensus=dataclasses.replace(original.field_consensus, enabled=False)
+        original,
+        field_consensus=dataclasses.replace(original.field_consensus, enabled=False),
+        accessory_penalty=dataclasses.replace(original.accessory_penalty, enabled=False),
     )
     yield
     app.search_service.CONFIG = original

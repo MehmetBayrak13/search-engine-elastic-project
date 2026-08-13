@@ -375,14 +375,15 @@ def test_dynamic_category_discovery_preserved_with_pagination(monkeypatch):
 
 def test_quality_ranking_stays_disabled_by_default_with_pagination():
     assert app.search_service.CONFIG.quality_ranking.enabled is False
-    # field_consensus (Task 3) ve popularity_ranking (varsayılan AÇIK) kendi
-    # bağımsız `function_score` sarmalayıcılarını ekliyor; bu doğrulama
-    # yalnızca quality_ranking'in kendi wrapper'ına odaklı kalsın diye
-    # ikisi de burada devre dışı bırakılıyor.
+    # field_consensus (Task 3), popularity_ranking ve accessory_penalty
+    # (hepsi varsayılan AÇIK) kendi bağımsız `function_score` sarmalayıcılarını
+    # ekliyor; bu doğrulama yalnızca quality_ranking'in kendi wrapper'ına
+    # odaklı kalsın diye hepsi burada devre dışı bırakılıyor.
     no_consensus_cfg = dataclasses.replace(
         app.search_service.CONFIG,
         field_consensus=dataclasses.replace(app.search_service.CONFIG.field_consensus, enabled=False),
         popularity_ranking=dataclasses.replace(app.search_service.CONFIG.popularity_ranking, enabled=False),
+        accessory_penalty=dataclasses.replace(app.search_service.CONFIG.accessory_penalty, enabled=False),
     )
     payload = app.build_search_query("kamera", page=2, apply_intent_reranking=False, config=no_consensus_cfg)
     assert "function_score" not in payload["query"]

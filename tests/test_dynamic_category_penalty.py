@@ -27,14 +27,15 @@ def _with_dynamic_intent(**overrides):
 @pytest.fixture(autouse=True)
 def _restore_config():
     original = app.search_service.CONFIG
-    # field_consensus/popularity_ranking kendi function_score sarmalayıcılarını
-    # ekliyor; bu dosya yalnızca dynamic_category_penalty'nin kendi wrapper'ına
-    # odaklı kalsın diye ikisi de burada devre dışı bırakılıyor (bkz. aynı
-    # gerekçe test_quality_ranking.py/test_popularity_ranking.py'de).
+    # field_consensus/popularity_ranking/accessory_penalty kendi function_score
+    # sarmalayıcılarını ekliyor; bu dosya yalnızca dynamic_category_penalty'nin
+    # kendi wrapper'ına odaklı kalsın diye hepsi burada devre dışı bırakılıyor
+    # (bkz. aynı gerekçe test_quality_ranking.py/test_popularity_ranking.py'de).
     app.search_service.CONFIG = dataclasses.replace(
         original,
         field_consensus=dataclasses.replace(original.field_consensus, enabled=False),
         popularity_ranking=dataclasses.replace(original.popularity_ranking, enabled=False),
+        accessory_penalty=dataclasses.replace(original.accessory_penalty, enabled=False),
     )
     yield
     app.search_service.CONFIG = original

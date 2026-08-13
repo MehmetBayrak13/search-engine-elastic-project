@@ -909,6 +909,43 @@ def _apply_dynamic_category_penalty(
     }
 
 
+def _apply_accessory_penalty(base_query: dict, query_text: str, cfg: "AppConfig") -> dict:
+    """Sorgudan BAĞIMSIZ, genel bir aksesuar/yedek-parça cezası uygular
+    (bkz. `AccessoryPenaltyConfig` docstring'i). `cfg.accessory_penalty.terms`den,
+    kullanıcının SORGUSUNDA GEÇMEYEN her terim için title'da o terimin
+    geçip geçmediğine bakılır — geçiyorsa ceza uygulanır. Kullanıcı zaten
+    o terimi arıyorsa (ör. sorgu "phone case" ise "case" için) ceza
+    UYGULANMAZ; bu yüzden sorguya özel bir kural değil, GENEL bir kuraldır
+    (aynı 'filtresiz taban + filtreli penaltı, score_mode: multiply'
+    deseni — bkz. `_apply_dynamic_category_penalty`)."""
+    ap = cfg.accessory_penalty
+    if not ap.enabled or not ap.terms:
+        return base_query
+
+    normalized_query = _normalize_query_text(query_text)
+    applicable_terms = [term for term in ap.terms if term not in normalized_query]
+    if not applicable_terms:
+        return base_query
+
+    accessory_filter = {
+        "bool": {
+            "should": [{"match_phrase": {"title": term}} for term in applicable_terms],
+            "minimum_should_match": 1,
+        }
+    }
+    return {
+        "function_score": {
+            "query": base_query,
+            "functions": [
+                {"weight": 1.0},
+                {"filter": accessory_filter, "weight": ap.penalty},
+            ],
+            "score_mode": "multiply",
+            "boost_mode": "multiply",
+        }
+    }
+
+
 def relevance_debug_from_matched_queries(matched_queries: list[str] | None, cfg: "AppConfig") -> dict:
     """ES'in native `_name`/`matched_queries` mekanizmasından (bkz.
     build_search_query(include_relevance_debug=True), spec §8 — canlı
@@ -1226,6 +1263,8 @@ def build_search_query(
     base_query = _apply_dynamic_category_penalty(
         base_query, list(intent_signals.debug.get("dynamic_discovery", [])), cfg
     )
+
+    base_query = _apply_accessory_penalty(base_query, query_text, cfg)
 
     negative_clause, negative_boost = _soft_negative_boosting_negative_clause(
         intent_signals.negative_categories
