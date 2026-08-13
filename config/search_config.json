@@ -70,7 +70,8 @@
     "aggregation_fields": [
       "categories",
       "main_category",
-      "source_category"
+      "source_category",
+      "store"
     ],
     "negative_category_penalty": 0.5
   },

@@ -208,6 +208,18 @@ def test_aggregation_fields_come_from_config():
     assert set(payload["aggs"].keys()) == expected_agg_names
 
 
+def test_store_field_included_for_brand_query_segmentation():
+    # "store" alanı, kullanıcının sorgusunda bir marka geçip geçmediğini
+    # (ör. "nike sneakers") reindex GEREKTİRMEDEN, mevcut kategori keşfi
+    # altyapısını yeniden kullanarak tespit etmek için eklendi (bkz. CLAUDE.md
+    # sorgu segmentasyonu notları). Bu, `by_store` aggregation bucket'ının
+    # her zaman üretileceğini kilitler.
+    assert "store" in app.search_service.CONFIG.dynamic_intent.aggregation_fields
+    payload = app.build_category_discovery_query("nike sneakers")
+    assert "by_store" in payload["aggs"]
+    assert payload["aggs"]["by_store"]["terms"]["field"] == "store"
+
+
 def test_discovery_query_is_size_zero_with_short_timeout():
     payload = app.build_category_discovery_query("toilet paper")
     assert payload["size"] == 0

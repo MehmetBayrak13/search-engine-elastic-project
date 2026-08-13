@@ -1075,6 +1075,24 @@ tuvalet kağıdı
 
 The English translation may be used to discover English category buckets.
 
+### Brand / store detection (query segmentation)
+
+`dynamic_intent.aggregation_fields` includes `store` alongside the category
+fields. This gives lightweight query segmentation — if a query names a brand
+(e.g. `nike sneakers`), the `store` field (a `keyword` field, aggregatable
+with no reindex) surfaces `Nike` as a top discovered candidate the same way a
+category would, and it gets the same positive `term` boost via
+`_positive_category_should_clauses`. No separate brand list or NER step is
+needed: this reuses the existing discovery/boost pipeline entirely, so a
+query with no brand (e.g. `wireless headphones`) simply yields no `store`
+candidate rather than guessing one.
+
+`store` is a `keyword` field with a lowercase normalizer, so the plain
+`match` used by `store_boost` (`field_relevance.store_boost`) only fires when
+the *entire* query text equals a store value — useful for a one-word brand
+query, but not for a longer query naming a brand plus a product. The dynamic
+`store` aggregation candidate is what covers that longer-query case.
+
 Do not call normalized category score a probability.
 
 Use honest fields such as:

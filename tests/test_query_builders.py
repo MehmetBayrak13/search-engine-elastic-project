@@ -454,6 +454,23 @@ def test_dynamic_positive_category_renders_term_on_its_own_field():
     assert any(c.get("term", {}).get("main_category", {}).get("value") == "Computers" for c in should)
 
 
+def test_dynamic_positive_store_candidate_renders_term_on_store_field():
+    # "store" `dynamic_intent.aggregation_fields`e eklendi (bkz. CLAUDE.md
+    # sorgu segmentasyonu notları) -- keşfedilen bir mağaza/marka adayı da
+    # (ör. "nike sneakers" sorgusunda store="Nike") diğer dinamik alanlarla
+    # AYNI genel mekanizmayla (should altında term) boost almalı, özel bir
+    # kod yolu gerekmeden.
+    from services.intent_service import IntentSignals
+    import services.search_service as search_service
+
+    signals = IntentSignals(
+        positive_categories=({"value": "Nike", "boost": 2.0, "source": "dynamic", "field": "store"},),
+    )
+    payload = search_service.build_search_query("nike sneakers", intent_signals=signals)
+    should = _innermost_query(payload["query"])["bool"]["should"]
+    assert any(c.get("term", {}).get("store", {}).get("value") == "Nike" for c in should)
+
+
 def test_title_ranking_adds_exact_and_prefix_tiers():
     payload = app.build_search_query("wireless mouse")
     should = _innermost_query(payload["query"])["bool"]["must"][0]["bool"]["should"]
