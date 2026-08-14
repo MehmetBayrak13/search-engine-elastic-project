@@ -33,7 +33,12 @@ export default function App() {
   const [flags, setFlags] = useState(DEFAULT_FLAGS);
   const [liveSuggestions, setLiveSuggestions] = useState(true);
   const [esOk, setEsOk] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  // Masaüstünde varsayılan AÇIK (mevcut davranış), mobilde varsayılan KAPALI --
+  // aksi halde telefonda kullanıcı asıl sonuçlara/boş duruma ulaşmadan önce
+  // koca bir ayarlar panelini kaydırmak zorunda kalıyordu.
+  const [sidebarOpen, setSidebarOpen] = useState(
+    () => typeof window === 'undefined' || window.matchMedia('(min-width: 901px)').matches,
+  );
   const [sortMode, setSortMode] = useState('relevance');
   const [lastLatencyMs, setLastLatencyMs] = useState(null);
 

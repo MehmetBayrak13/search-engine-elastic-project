@@ -914,4 +914,24 @@
   .si-input {
     padding: 13px 14px 13px 46px;
   }
+  /* Masaüstünde sidebar sonuçların yanında `position: sticky` ile durur;
+     mobilde tek sütunlu akışta içeriğin ÜSTÜNDE normal bir blok olarak
+     yer alıyor -- sticky bırakılırsa kaydırma sırasında gereksiz yere
+     üstte "yapışık" kalmaya çalışabilir. */
+  .sidebar {
+    position: static;
+  }
+  /* Switch dokunma hedefini büyütür (40x23 -> 48x28) -- iOS/Android'in
+     önerdiği ~44px minimum dokunma alanına yaklaştırır. */
+  .switch {
+    width: 48px;
+    height: 28px;
+  }
+  .slider::before {
+    height: 22px;
+    width: 22px;
+  }
+  .switch input:checked + .slider::before {
+    transform: translateX(20px);
+  }
 }
