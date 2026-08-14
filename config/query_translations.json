@@ -151,6 +151,11 @@
     "spor çantası": ["gym bag", "sports bag"],
     "seyahat çantası": ["travel bag"],
     "makyaj çantası": ["makeup bag", "cosmetic bag"],
+    "plaj çantası": ["beach bag"],
+    "alışveriş çantası": ["shopping bag", "tote bag"],
+    "laptop çantası": ["laptop bag"],
+    "kamera çantası": ["camera bag"],
+    "alet çantası": ["tool bag"],
     "numaralı gözlük": ["prescription glasses"],
     "kontak lens": ["contact lenses"],
 
