@@ -196,7 +196,16 @@
 
     "işitme cihazı": ["hearing aid"],
     "koltuk değneği": ["crutches"],
-    "tekerlekli sandalye": ["wheelchair"]
+    "tekerlekli sandalye": ["wheelchair"],
+
+    "el feneri": ["flashlight", "torch"],
+    "el fenerleri": ["flashlights", "torches"],
+
+    "saç kremi": ["conditioner"],
+    "takma kirpik": ["false eyelashes", "false lashes"],
+    "saç fırçası": ["hair brush"],
+    "duş jeli": ["body wash"],
+    "çocuk kitabı": ["children's book"]
   },
   "terms": {
     "kablosuz": ["wireless"],
@@ -637,6 +646,45 @@
     "tulum": ["jumpsuit", "overalls"],
     "tulumu": ["jumpsuit", "overalls"],
     "ajanda": ["planner"],
-    "ajandası": ["planner"]
+    "ajandası": ["planner"],
+
+    "krem": ["cream", "lotion"],
+    "kremi": ["cream", "lotion"],
+    "nemlendirici": ["moisturizer"],
+    "serum": ["serum"],
+    "serumu": ["serum"],
+    "peruk": ["wig"],
+    "peruğu": ["wig"],
+    "sabun": ["soap"],
+    "sabunu": ["soap"],
+    "tarak": ["comb"],
+    "tarağı": ["comb"],
+
+    "amortisör": ["shock absorber"],
+    "amortisörü": ["shock absorber"],
+    "jant": ["rim", "wheel"],
+    "jantı": ["rim", "wheel"],
+    "fren": ["brake"],
+    "freni": ["brake"],
+    "far": ["headlight"],
+    "farı": ["headlight"],
+    "egzoz": ["exhaust"],
+    "egzozu": ["exhaust"],
+    "şanzıman": ["transmission"],
+    "şanzımanı": ["transmission"],
+    "sensör": ["sensor"],
+    "sensörü": ["sensor"],
+
+    "dikiş": ["sewing"],
+    "örgü": ["knitting"],
+    "kumaş": ["fabric"],
+    "kumaşı": ["fabric"],
+    "boncuk": ["bead", "beads"],
+    "kurdele": ["ribbon"],
+    "çizim": ["drawing"],
+    "maket": ["model kit"],
+
+    "ampul": ["light bulb", "bulb"],
+    "ampulü": ["light bulb", "bulb"]
   }
 }
