@@ -52,6 +52,10 @@ export function searchProducts({ query, page, enablePhrase, enableMultiMatch, en
     enable_fuzzy: enableFuzzy,
     enable_exact_asin: enableExactAsin,
     sort,
+    // Ek bir Elasticsearch isteği YAPMAZ (bkz. api/main.py: relevance_debug_from_matched_queries
+    // docstring'i) -- aynı yanıttan, sorguya eklenen `_name`'ler sayesinde okunur.
+    // Kart başına "neden bu sonuç?" açıklaması için kullanılır.
+    debug_relevance: true,
   });
 }
 

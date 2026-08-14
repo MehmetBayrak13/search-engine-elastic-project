@@ -696,6 +696,42 @@
   background: linear-gradient(90deg, var(--blue), #4d96e8);
   border-radius: 4px;
 }
+/* ============ NEDEN BU SONUÇ (relevance explain) ============ */
+.explain {
+  margin-top: -2px;
+}
+.explain-toggle {
+  border: 0;
+  background: transparent;
+  color: var(--blue);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 0;
+}
+.explain-toggle:hover {
+  text-decoration: underline;
+}
+.explain-panel {
+  margin-top: 8px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  font-size: 11.5px;
+  color: var(--muted);
+  cursor: default;
+}
+.explain-row {
+  padding: 2px 0;
+}
+.explain-row b {
+  color: var(--ink);
+  font-weight: 600;
+}
+.explain-warn {
+  color: var(--warning-fg);
+}
+
 .card-cta {
   margin: 0 16px 16px;
   border: 1.5px solid var(--navy-700);

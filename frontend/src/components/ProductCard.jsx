@@ -1,5 +1,22 @@
+import { useState } from 'react';
+
 function openProduct(url) {
   if (url) window.open(url, '_blank', 'noopener,noreferrer');
+}
+
+const FIELD_LABELS = {
+  title: 'Başlık',
+  'title.tr': 'Başlık',
+  features: 'Özellikler',
+  'features.tr': 'Özellikler',
+  description: 'Açıklama',
+  'description.tr': 'Açıklama',
+  categories_text: 'Kategori',
+  'categories_text.tr': 'Kategori',
+};
+
+function fieldLabel(field) {
+  return FIELD_LABELS[field] || field;
 }
 
 /**
@@ -27,7 +44,8 @@ function highlightTitle(title, query) {
   );
 }
 
-export default function ProductCard({ product, query, maxScore }) {
+export default function ProductCard({ product, query, maxScore, explain }) {
+  const [explainOpen, setExplainOpen] = useState(false);
   const {
     title,
     store,
@@ -110,6 +128,46 @@ export default function ProductCard({ product, query, maxScore }) {
             </span>
           </span>
         </div>
+
+        {explain && (
+          <div className="explain">
+            <button
+              type="button"
+              className="explain-toggle"
+              aria-expanded={explainOpen}
+              onClick={(event) => {
+                event.stopPropagation();
+                setExplainOpen((open) => !open);
+              }}
+            >
+              ⓘ Neden bu sonuç?
+            </button>
+            {explainOpen && (
+              <div className="explain-panel" onClick={(event) => event.stopPropagation()}>
+                <div className="explain-row">
+                  <b>Eşleşen alanlar:</b>{' '}
+                  {explain.matched_fields.length > 0
+                    ? explain.matched_fields.map(fieldLabel).join(', ')
+                    : 'belirlenemedi'}
+                </div>
+                <div className="explain-row">
+                  <b>Konsensüs:</b> {explain.consensus_level} alan
+                  {explain.consensus_level >= 2 ? ' — birden fazla alanda eşleşti, skor güçlendirildi' : ''}
+                </div>
+                {explain.contradictions.length > 0 && (
+                  <div className="explain-row explain-warn">
+                    ⚠ Çelişkili sinyal: {explain.contradictions.map(fieldLabel).join(', ')} — ceza uygulandı
+                  </div>
+                )}
+                {explain.applied_penalty < 1 && (
+                  <div className="explain-row explain-warn">
+                    ⚠ Skor ×{explain.applied_penalty.toFixed(2)} ile düşürüldü
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
       <button
         type="button"

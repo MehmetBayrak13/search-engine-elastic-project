@@ -307,8 +307,14 @@ export default function App() {
           {!loading && hasHits && (
             <>
               <div className="grid">
-                {result.hits.map((product) => (
-                  <ProductCard key={product.asin} product={product} query={result.query} maxScore={maxScore} />
+                {result.hits.map((product, index) => (
+                  <ProductCard
+                    key={product.asin}
+                    product={product}
+                    query={result.query}
+                    maxScore={maxScore}
+                    explain={result.relevance_debug?.[index]}
+                  />
                 ))}
               </div>
               <Pagination config={config} result={result} onPrev={handlePrevPage} onNext={handleNextPage} />
