@@ -319,6 +319,21 @@
 
     "walkietalkie": ["walkie talkie"],
     "smartband": ["fitness tracker"],
-    "fitnesstracker": ["fitness tracker"]
+    "fitnesstracker": ["fitness tracker"],
+
+    "parka": ["winter coat"],
+    "bangle": ["bracelet"],
+    "bracelet": ["bangle"],
+    "fannypack": ["waist bag", "fanny pack"],
+    "saucepan": ["pot"],
+    "recordplayer": ["record player"],
+    "carryon": ["carry-on bag", "carry-on luggage"],
+    "playyard": ["playpen", "play yard"],
+    "bassinet": ["cradle"],
+    "cradle": ["bassinet"],
+    "babywalker": ["baby walker"],
+    "playmat": ["play mat", "activity mat"],
+    "teether": ["teething ring"],
+    "babybouncer": ["baby bouncer"]
   }
 }

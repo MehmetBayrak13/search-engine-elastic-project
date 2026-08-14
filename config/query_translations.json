@@ -172,7 +172,31 @@
     "ikinci el": ["used", "secondhand"],
     "su geçirmez": ["waterproof"],
     "şarj edilebilir": ["rechargeable"],
-    "paslanmaz çelik": ["stainless steel"]
+    "paslanmaz çelik": ["stainless steel"],
+
+    "şarj cihazı": ["charger"],
+    "ses sistemi": ["sound system"],
+    "ev sinema sistemi": ["home theater system"],
+    "uzaktan kumandalı araba": ["remote control car", "rc car"],
+    "insansız hava aracı": ["drone"],
+
+    "mutfak robotu": ["food processor"],
+    "waffle makinesi": ["waffle maker"],
+    "yumurta pişirici": ["egg cooker"],
+    "duş başlığı": ["shower head"],
+
+    "bahçe makası": ["garden shears"],
+    "araç kamerası": ["dash cam"],
+    "lastik pompası": ["tire inflator", "air pump"],
+    "araç güneşliği": ["car sun shade"],
+
+    "boks eldiveni": ["boxing gloves"],
+    "not defteri": ["notepad", "notebook"],
+    "dosya kutusu": ["file box"],
+
+    "işitme cihazı": ["hearing aid"],
+    "koltuk değneği": ["crutches"],
+    "tekerlekli sandalye": ["wheelchair"]
   },
   "terms": {
     "kablosuz": ["wireless"],
@@ -588,6 +612,31 @@
     "çikolata": ["chocolate"],
     "çikolatası": ["chocolate"],
     "reçel": ["jam"],
-    "reçeli": ["jam"]
+    "reçeli": ["jam"],
+
+    "gitar": ["guitar"],
+    "gitarı": ["guitar"],
+    "piyano": ["piano"],
+    "piyanosu": ["piano"],
+    "keman": ["violin"],
+    "kemanı": ["violin"],
+    "davul": ["drums", "drum"],
+    "davulu": ["drums"],
+    "bateri": ["drum kit"],
+
+    "lavabo": ["sink"],
+    "lavabosu": ["sink"],
+    "klozet": ["toilet"],
+    "klozeti": ["toilet"],
+    "sera": ["greenhouse"],
+    "serası": ["greenhouse"],
+
+    "gerdanlık": ["necklace"],
+    "gerdanlığı": ["necklace"],
+    "bone": ["beanie", "knit hat"],
+    "tulum": ["jumpsuit", "overalls"],
+    "tulumu": ["jumpsuit", "overalls"],
+    "ajanda": ["planner"],
+    "ajandası": ["planner"]
   }
 }
