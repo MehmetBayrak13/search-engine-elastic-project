@@ -234,7 +234,20 @@
     "araç düzenleyici": ["car organizer"],
     "bagaj düzenleyici": ["trunk organizer", "car organizer"],
     "masa düzenleyici": ["desk organizer"],
-    "kablo düzenleyici": ["cable organizer"]
+    "kablo düzenleyici": ["cable organizer"],
+
+    "su pompası": ["water pump"],
+    "yakıt deposu": ["fuel tank"],
+    "sinyal lambası": ["turn signal"],
+    "banyo bombası": ["bath bomb"],
+    "tıraş kremi": ["shaving cream"],
+    "saç maskesi": ["hair mask"],
+    "tırnak makası": ["nail clippers"],
+    "kirpik kıvırıcı": ["eyelash curler"],
+    "toplu iğne": ["pin"],
+    "dikiş makinesi": ["sewing machine"],
+    "diş kaşıyıcı": ["teether"],
+    "bebek maması": ["baby food"]
   },
   "terms": {
     "kablosuz": ["wireless"],
@@ -774,6 +787,55 @@
     "bagaj": ["trunk", "luggage"],
     "bagajı": ["trunk", "luggage"],
     "iç": ["interior", "inner"],
-    "içi": ["interior", "inner"]
+    "içi": ["interior", "inner"],
+
+    "kolçak": ["armrest"],
+    "kolçağı": ["armrest"],
+    "zincir": ["chain"],
+    "zinciri": ["chain"],
+    "çamurluk": ["mud flap", "fender"],
+    "çamurluğu": ["mud flap", "fender"],
+    "debriyaj": ["clutch"],
+    "debriyajı": ["clutch"],
+    "kapı": ["door"],
+    "kapısı": ["door"],
+    "röle": ["relay"],
+    "rölesi": ["relay"],
+    "sigorta": ["fuse"],
+    "sigortası": ["fuse"],
+    "kriko": ["jack"],
+    "krikosu": ["jack"],
+    "enjektör": ["fuel injector"],
+    "enjektörü": ["fuel injector"],
+    "motosiklet": ["motorcycle"],
+    "motosikleti": ["motorcycle"],
+
+    "tonik": ["toner"],
+    "toniği": ["toner"],
+    "kapatıcı": ["concealer"],
+    "kapatıcısı": ["concealer"],
+    "allık": ["blush"],
+    "allığı": ["blush"],
+    "cımbız": ["tweezers"],
+    "cımbızı": ["tweezers"],
+    "epilatör": ["epilator"],
+    "epilatörü": ["epilator"],
+
+    "şişe": ["bottle"],
+    "şişesi": ["bottle"],
+    "ocak": ["stove", "cooktop"],
+    "ocağı": ["stove", "cooktop"],
+
+    "fermuar": ["zipper"],
+    "fermuarı": ["zipper"],
+    "toka": ["buckle", "clasp"],
+    "tokası": ["buckle", "clasp"],
+    "tığ": ["crochet hook"],
+    "tığı": ["crochet hook"],
+    "tuval": ["canvas"],
+    "tuvali": ["canvas"],
+
+    "önlük": ["bib"],
+    "önlüğü": ["bib"]
   }
 }
