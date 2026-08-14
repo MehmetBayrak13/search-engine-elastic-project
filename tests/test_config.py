@@ -105,6 +105,14 @@ def _minimal_search_config(**overrides):
             "penalty": 0.4,
             "terms": ["case", "sticker"],
         },
+        "book_title_gate": {
+            "enabled": True,
+            "categories": ["books"],
+            "category_field": "main_category",
+            "title_field": "title.keyword",
+            "asin_field": "parent_asin",
+            "fuzziness": "AUTO",
+        },
         "pagination": {
             "enabled": True,
             "page_size": 20,

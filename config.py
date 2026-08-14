@@ -345,6 +345,53 @@ class AccessoryPenaltyConfig:
 
 
 @dataclass(frozen=True)
+class BookTitleGateConfig:
+    """Kitap/e-kitap/sesli kitap kategorilerindeki ürünler için sert bir
+    filtre: diğer ürünlerin kullandığı parçalı çok-alanlı lexical eşleşme
+    (title/features/description/categories_text üzerinde ayrı ayrı kelime
+    eşleşmeleri) kitaplar için YETERLİ DEĞİLDİR. Bir kitap yalnızca sorgu,
+    başlığının tamamına (neredeyse) eşitse -- birebir aynıysa ya da yalnızca
+    `fuzziness` ile düzeltilecek kadar yakınsa -- sonuçlarda kalır.
+
+    Motivasyon (kullanıcı örneği): "Abuzittin'in Kırmızı Arabası" adlı bir
+    çocuk kitabı, "kırmızı" ya da "kırmızı araba" gibi PARÇALI sorgularda da
+    çıkıyordu çünkü kelimeler başlıkta gerçekten geçiyor -- multi_match/fuzzy
+    gibi genel yöntemler bunu meşru bir eşleşme sayıyor. Kataloğun devasa
+    "Books" kategorisi (bkz. `_apply_dynamic_category_penalty`/significant_terms
+    notları) neredeyse her jenerik kelime için böyle yanlış-pozitifler
+    üretebiliyor. Bu filtre kategoriye ÖZGÜ (yalnızca `categories`te
+    listelenen kategoriler etkilenir, diğer ürünler bundan etkilenmez) ve
+    sert bir dışlamadır (`bool.must_not` -- yalnızca reranking değil).
+
+    `title_field`in `fuzzy` (term-level) sorgusu TÜM başlığı TEK bir terim
+    gibi ele alır: `fuzziness: "AUTO"` başlığın tamamı için en fazla ~2
+    karakterlik farka izin verir (ES'in kendi AUTO ölçeklemesi, uzun
+    başlıklarda bile üst sınır 2 karakterdir) -- yani gerçekten küçük bir
+    yazım farkı (apostrof, aksan) geçer ama "kırmızı araba" gibi büyük ölçüde
+    KISALTILMIŞ bir sorgu geçmez. `asin_field`, kullanıcı kitabın gerçek
+    ASIN'ini yazdığında (başlıkla hiç örtüşmez) filtrenin yanlışlıkla o kitabı
+    da dışlamasını önler.
+
+    `title_field` (`title.keyword`) zaten `lowercase_normalizer` taşıyan bir
+    keyword alanı (bkz. canlı mapping doğrulaması) -- `fuzzy` sorgusu
+    (`term`'ün aksine) `case_insensitive` PARAMETRESİNİ desteklemiyor
+    (ES: "[fuzzy] query does not support [case_insensitive]"), ama buna hiç
+    gerek yok: normalizer indeksleme SIRASINDA zaten küçük harfe çeviriyor,
+    `fuzzy` sorgusunun kendi değeri de aynı normalizer'dan otomatik geçer.
+    `asin_field` (`parent_asin`) normalizer'sız düz bir keyword olduğu için
+    oradaki `term` sorgusu `case_insensitive: true`'yu (bunu destekleyen
+    `term`/`terms`/`prefix`/`wildcard`/`range` ailesinden) kullanmaya devam
+    eder."""
+
+    enabled: bool
+    categories: tuple[str, ...]
+    category_field: str
+    title_field: str
+    asin_field: str
+    fuzziness: str
+
+
+@dataclass(frozen=True)
 class TitleRankingConfig:
     """Title alanı için katmanlı skor ayarları. Yalnızca burada tanımlı iki
     YENİ katmanı (exact, prefix) kontrol eder — phrase/normal/fuzzy
@@ -547,6 +594,7 @@ class AppConfig:
     rating_sort: RatingSortConfig
     alternate_sort: AlternateSortConfig
     accessory_penalty: AccessoryPenaltyConfig
+    book_title_gate: BookTitleGateConfig
     title_ranking: TitleRankingConfig
     intent_ranking: IntentRankingConfig
     field_relevance: FieldRelevanceConfig
@@ -817,6 +865,20 @@ def _build_accessory_penalty(raw: Any, context: str) -> AccessoryPenaltyConfig:
     )
 
 
+def _build_book_title_gate(raw: Any, context: str) -> BookTitleGateConfig:
+    raw = _require_dict(raw, context)
+    return BookTitleGateConfig(
+        enabled=_require_bool(raw.get("enabled"), f"{context}.enabled"),
+        categories=tuple(
+            c.casefold() for c in _require_str_list(raw.get("categories"), f"{context}.categories", allow_empty=True)
+        ),
+        category_field=_require_str(raw.get("category_field"), f"{context}.category_field"),
+        title_field=_require_str(raw.get("title_field"), f"{context}.title_field"),
+        asin_field=_require_str(raw.get("asin_field"), f"{context}.asin_field"),
+        fuzziness=_require_str(raw.get("fuzziness"), f"{context}.fuzziness"),
+    )
+
+
 def _build_pagination(raw: Any, context: str) -> PaginationConfig:
     raw = _require_dict(raw, context)
     page_size = _require_positive_int(raw.get("page_size"), f"{context}.page_size")
@@ -997,6 +1059,7 @@ def load_search_config(path: Path = SEARCH_CONFIG_PATH) -> AppConfig:
     rating_sort = _build_rating_sort(raw.get("rating_sort"), "rating_sort")
     alternate_sort = _build_alternate_sort(raw.get("alternate_sort"), "alternate_sort")
     accessory_penalty = _build_accessory_penalty(raw.get("accessory_penalty"), "accessory_penalty")
+    book_title_gate = _build_book_title_gate(raw.get("book_title_gate"), "book_title_gate")
     title_ranking = _build_title_ranking(raw.get("title_ranking"), "title_ranking")
     intent_ranking = _build_intent_ranking(raw.get("intent_ranking"), "intent_ranking")
     field_relevance = _build_field_relevance(raw.get("field_relevance"), "field_relevance")
@@ -1043,6 +1106,7 @@ def load_search_config(path: Path = SEARCH_CONFIG_PATH) -> AppConfig:
         rating_sort=rating_sort,
         alternate_sort=alternate_sort,
         accessory_penalty=accessory_penalty,
+        book_title_gate=book_title_gate,
         title_ranking=title_ranking,
         intent_ranking=intent_ranking,
         field_relevance=field_relevance,

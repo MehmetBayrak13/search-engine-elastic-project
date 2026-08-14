@@ -95,9 +95,21 @@ def test_intent_exclusions_live_under_must_not():
     assert must_not, "watch niyeti için kitap dışlaması bekleniyor"
 
 
+def _non_book_gate_must_not(query_node):
+    """`must_not` now unconditionally carries the book_title_gate clause
+    (see config/search_config.json: book_title_gate.enabled) alongside any
+    legacy_hard_exclusions -- distinguishable by shape: the book gate is
+    `{"bool": {"filter": [...], "must_not": [...]}}`, legacy exclusions are
+    `{"bool": {"should": [...], "minimum_should_match": 1}}`. Tests that
+    assert "no watch/book legacy exclusion leaked" should filter the book
+    gate clause out first rather than asserting `must_not` is empty."""
+    must_not = query_node["bool"].get("must_not", [])
+    return [c for c in must_not if "filter" not in c.get("bool", {})]
+
+
 def test_watch_book_query_does_not_exclude_books():
     payload = app.build_search_query("watch book")
-    assert not _innermost_query(payload["query"])["bool"].get("must_not")
+    assert not _non_book_gate_must_not(_innermost_query(payload["query"]))
 
 
 def test_exact_asin_field_and_boost_come_from_config():
@@ -407,7 +419,7 @@ def test_object_negative_category_uses_boosting_not_must_not():
         query = query["function_score"]["query"]
     assert "boosting" in query
     assert query["boosting"]["negative_boost"] >= search_service.CONFIG.intent_ranking.negative_penalty_floor
-    assert "must_not" not in _innermost_query(query["boosting"]["positive"]).get("bool", {})
+    assert not _non_book_gate_must_not(_innermost_query(query["boosting"]["positive"]))
 
 
 def test_legacy_hard_exclusion_still_uses_must_not():
@@ -641,9 +653,11 @@ def test_relevance_contradiction_never_produces_must_not():
     # payload["query"] is always a function_score wrapper (Task 3's field_consensus
     # wraps unconditionally when enabled) — peel back to the real bool node, same
     # as every other structural assertion in this file (see _innermost_query).
-    # must_not, when present, is reserved for legacy_hard_exclusions only (watch/book) —
-    # this query has no watch/book signal, so must_not must be entirely absent.
-    assert "must_not" not in _innermost_query(payload["query"])["bool"]
+    # must_not, aside from the unconditional book_title_gate clause (see
+    # _non_book_gate_must_not), is reserved for legacy_hard_exclusions only
+    # (watch/book) — this query has no watch/book signal, so no legacy
+    # exclusion clause should be present.
+    assert not _non_book_gate_must_not(_innermost_query(payload["query"]))
 
 
 def test_relevance_contradiction_absent_without_contradiction_terms():

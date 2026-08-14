@@ -256,6 +256,128 @@ def test_debug_relevance_reports_contradiction_penalty(monkeypatch):
     assert entry["applied_penalty"] < 1.0
 
 
+def _innermost_query(query_node):
+    """Same unwrap helper as tests/test_query_builders.py (duplicated locally
+    -- each test file mocks/asserts independently by convention in this repo,
+    see e.g. `_mock_post_search` being redefined per file rather than shared)."""
+    node = query_node
+    while isinstance(node, dict):
+        if "function_score" in node:
+            node = node["function_score"]["query"]
+        elif "boosting" in node:
+            node = node["boosting"]["positive"]
+        else:
+            break
+    return node
+
+
+def _capture_payloads(monkeypatch, response_hits=None):
+    """Records every payload sent to `_post_search` during one API call --
+    a single /api/search request can trigger up to three real ES calls
+    (dynamic category discovery aggregation `size:0`, an alternate-sort
+    `min_score` probe `size:1`, and the real search `size:page_size`), so
+    callers must pick the right one out of `captured` (see `_main_payload`)."""
+    captured = []
+    hits_payload = response_hits if response_hits is not None else {"hits": [], "total": {"value": 0}}
+
+    def fake_post_search(payload, timeout=20, index=None, search_type=None):
+        captured.append(payload)
+        if payload.get("size") == 0:
+            return {"aggregations": {}}, None
+        return {"hits": hits_payload}, None
+
+    monkeypatch.setattr(search_service, "_post_search", fake_post_search)
+    return captured
+
+
+def _main_payload(captured):
+    page_size = search_service.CONFIG.pagination.page_size
+    return next(p for p in captured if p.get("size") == page_size)
+
+
+def test_search_forwards_enable_phrase_toggle(monkeypatch):
+    # Proves the HTTP query param actually reaches `build_search_query` --
+    # service-level tests (tests/test_query_builders.py) already prove the
+    # *query-building* logic for each toggle is correct; this proves the
+    # *wiring* from api/main.py's `enable_phrase: bool = Query(...)` through
+    # `search_products` doesn't have a param-name mismatch/typo.
+    captured_with = _capture_payloads(monkeypatch)
+    client.get("/api/search", params={"q": "gadget"})
+    with_should = _innermost_query(_main_payload(captured_with)["query"])["bool"]["must"][0]["bool"]["should"]
+
+    captured_without = _capture_payloads(monkeypatch)
+    client.get("/api/search", params={"q": "gadget", "enable_phrase": False})
+    without_should = _innermost_query(_main_payload(captured_without)["query"])["bool"]["must"][0]["bool"]["should"]
+
+    assert len(without_should) == len(with_should) - 1
+
+
+def test_search_forwards_enable_exact_asin_toggle(monkeypatch):
+    captured_with = _capture_payloads(monkeypatch)
+    client.get("/api/search", params={"q": "gadget"})
+    with_should = _innermost_query(_main_payload(captured_with)["query"])["bool"]["must"][0]["bool"]["should"]
+
+    captured_without = _capture_payloads(monkeypatch)
+    client.get("/api/search", params={"q": "gadget", "enable_exact_asin": False})
+    without_should = _innermost_query(_main_payload(captured_without)["query"])["bool"]["must"][0]["bool"]["should"]
+
+    assert len(without_should) == len(with_should) - 1
+
+
+def test_search_forwards_enable_fuzzy_toggle(monkeypatch):
+    captured_with = _capture_payloads(monkeypatch)
+    client.get("/api/search", params={"q": "gadget"})
+    with_should = _innermost_query(_main_payload(captured_with)["query"])["bool"]["must"][0]["bool"]["should"]
+
+    captured_without = _capture_payloads(monkeypatch)
+    client.get("/api/search", params={"q": "gadget", "enable_fuzzy": False})
+    without_should = _innermost_query(_main_payload(captured_without)["query"])["bool"]["must"][0]["bool"]["should"]
+
+    assert len(without_should) == len(with_should) - 1
+
+
+def test_search_forwards_enable_multi_match_toggle(monkeypatch):
+    # field_relevance contributes one clause per configured field plus one
+    # cross_fields fallback clause (see test_field_relevance_disabled_by_enable_multi_match_toggle
+    # in test_query_builders.py for the same assertion at the service level).
+    captured_with = _capture_payloads(monkeypatch)
+    client.get("/api/search", params={"q": "gadget"})
+    with_should = _innermost_query(_main_payload(captured_with)["query"])["bool"]["must"][0]["bool"]["should"]
+
+    captured_without = _capture_payloads(monkeypatch)
+    client.get("/api/search", params={"q": "gadget", "enable_multi_match": False})
+    without_should = _innermost_query(_main_payload(captured_without)["query"])["bool"]["must"][0]["bool"]["should"]
+
+    expected_delta = len(search_service.CONFIG.field_relevance.fields) + 1
+    assert len(without_should) == len(with_should) - expected_delta
+
+
+def test_search_forwards_page_param(monkeypatch):
+    captured = _capture_payloads(monkeypatch)
+    response = client.get("/api/search", params={"q": "gadget", "page": 2})
+    assert response.status_code == 200
+    page_size = search_service.CONFIG.pagination.page_size
+    assert _main_payload(captured)["from"] == page_size  # (page 2 - 1) * page_size
+
+
+def test_search_forwards_price_desc_sort(monkeypatch):
+    captured = _capture_payloads(monkeypatch)
+    response = client.get("/api/search", params={"q": "gadget", "sort": "price-desc"})
+    assert response.status_code == 200
+    assert _main_payload(captured)["sort"] == [{"price": {"order": "desc", "missing": "_last"}}, "_score"]
+
+
+def test_search_forwards_rating_sort_as_bayesian_script(monkeypatch):
+    # "rating" is deliberately absent from `_SORT_CLAUSES` (see its comment)
+    # -- it produces a Painless `_script` sort, not a static field sort.
+    captured = _capture_payloads(monkeypatch)
+    response = client.get("/api/search", params={"q": "gadget", "sort": "rating"})
+    assert response.status_code == 200
+    sort_clause = _main_payload(captured)["sort"]
+    assert isinstance(sort_clause, list)
+    assert "_script" in sort_clause[0]
+
+
 def test_debug_relevance_response_has_no_secret_shaped_strings(monkeypatch):
     import re
 

@@ -115,6 +115,14 @@
       "adapter", "adapters", "cable", "cables"
     ]
   },
+  "book_title_gate": {
+    "enabled": true,
+    "categories": ["books", "buy a kindle", "audible audiobooks"],
+    "category_field": "main_category",
+    "title_field": "title.keyword",
+    "asin_field": "parent_asin",
+    "fuzziness": "AUTO"
+  },
   "title_ranking": {
     "enabled": true,
     "exact_field": "title.keyword",

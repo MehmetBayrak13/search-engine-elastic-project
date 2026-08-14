@@ -336,8 +336,19 @@ def build_category_discovery_query(
         for text in candidate_texts
     ]
 
+    # `significant_terms` (plain `terms` DEĞİL): kataloğun devasa "Books"
+    # kategorisi neredeyse HER jenerik kelime için (ör. "computer", "television")
+    # ham doc_count'ta her zaman en üstte çıkıyordu -- kitap başlıklarında o
+    # kelime geçen binlerce kitap var, gerçek Electronics/Computers kategorisi
+    # ise çok daha küçük olduğu için top-N'e hiç giremiyordu (bkz. canlı
+    # doğrulama: "bilgisayar" -> ["books","books","books","amazon fashion",...],
+    # "all electronics" listede bile yok). `significant_terms`, foreground
+    # (eşleşen belgeler) oranını background (tüm index) oranıyla kıyaslar --
+    # her yerde zaten büyük olan "Books" gibi kovaları değil, BU sorguya özgü
+    # ORANSAL olarak öne çıkan kategorileri (ör. "wireless headphones" ->
+    # "all electronics" skoru "all beauty"nin ~5000 katı) yükseltir.
     aggs = {
-        agg_name: {"terms": {"field": field, "size": dyn.aggregation_size}}
+        agg_name: {"significant_terms": {"field": field, "size": dyn.aggregation_size}}
         for agg_name, field in dyn.aggregation_bucket_map.items()
     }
 
@@ -460,11 +471,25 @@ def discover_category_intent(
                 "value": value,
                 "field": field,
                 "doc_count": bucket.get("doc_count", 0),
+                # `significant_terms` bucket'ları bir de "score" taşır (foreground/
+                # background oran farkı) -- `bg_count`e göre nadir ama bu sorguya
+                # özgü kategorileri, her yerde zaten büyük olan kovalardan ayırt
+                # etmek için doc_count yerine BUNA göre sıralanır (aşağıya bkz.).
+                # Testlerdeki mock `terms`-şekilli bucket'larda bu alan yok --
+                # `.get` ile eksikliği sorunsuz (geriye dönük uyumlu).
+                "score": bucket.get("score"),
                 "rank": rank,
                 "source": "dynamic_category_discovery",
             })
 
-    candidates.sort(key=lambda item: item["doc_count"], reverse=True)
+    # Skor varsa (significant_terms) ona göre sırala -- ham doc_count, her
+    # sorguda zaten kataloğun en büyük kovalarını (ör. "Books") tepeye taşır;
+    # skor bu sorguya ÖZGÜ oransal öne çıkışı yansıtır. Skor yoksa (mock/eski
+    # terms yanıtı) doc_count'a düş.
+    candidates.sort(
+        key=lambda item: item["score"] if item["score"] is not None else item["doc_count"],
+        reverse=True,
+    )
     return candidates[: dyn.max_category_candidates]
 
 
@@ -984,6 +1009,56 @@ def _apply_accessory_penalty(base_query: dict, query_text: str, cfg: "AppConfig"
     }
 
 
+def _book_title_gate_must_not(query_text: str, cfg: "AppConfig") -> dict | None:
+    """`BookTitleGateConfig` docstring'indeki motivasyonun ES karşılığı:
+    "kitap kategorisinde AMA başlığa (neredeyse) tam eşleşmeyen" belgeleri
+    sert biçimde dışlayan tek bir `must_not` maddesi üretir. De Morgan
+    formuyla: dışla = isBook AND NOT(title yakın eşleşiyor OR ASIN birebir
+    eşleşiyor). Kitap olmayan belgeler `category_field` filtresine hiç
+    takılmadığı için bu madde onları etkilemez -- yalnızca `categories`te
+    listelenen kategoriler için "sert" bir kapı işlevi görür, diğer her şey
+    için no-op'tur. `enabled=false` ya da `categories` boşsa `None` döner
+    (çağıran taraf must_not listesine hiçbir şey eklemez)."""
+    gate = cfg.book_title_gate
+    if not gate.enabled or not gate.categories:
+        return None
+    return {
+        "bool": {
+            "filter": [{"terms": {gate.category_field: list(gate.categories)}}],
+            "must_not": [
+                {
+                    "bool": {
+                        "should": [
+                            # `fuzzy` -- `term`'ün aksine -- `case_insensitive`
+                            # parametresini desteklemez (ES: "[fuzzy] query
+                            # does not support [case_insensitive]"); buna
+                            # gerek de yok, çünkü title_field zaten
+                            # lowercase_normalizer taşıyan bir keyword alanı
+                            # (bkz. BookTitleGateConfig docstring'i) -- hem
+                            # indekslenen değer hem bu sorgunun kendi değeri
+                            # aynı normalizer'dan geçer.
+                            {
+                                "fuzzy": {
+                                    gate.title_field: {
+                                        "value": query_text,
+                                        "fuzziness": gate.fuzziness,
+                                    }
+                                }
+                            },
+                            {
+                                "term": {
+                                    gate.asin_field: {"value": query_text, "case_insensitive": True}
+                                }
+                            },
+                        ],
+                        "minimum_should_match": 1,
+                    }
+                }
+            ],
+        }
+    }
+
+
 def relevance_debug_from_matched_queries(matched_queries: list[str] | None, cfg: "AppConfig") -> dict:
     """ES'in native `_name`/`matched_queries` mekanizmasından (bkz.
     build_search_query(include_relevance_debug=True), spec §8 — canlı
@@ -1285,8 +1360,12 @@ def build_search_query(
             should_clauses.append(store_clause)
     if should_clauses:
         bool_query["should"] = should_clauses
-    if intent_signals.legacy_hard_exclusions:
-        bool_query["must_not"] = list(intent_signals.legacy_hard_exclusions)
+    must_not_clauses = list(intent_signals.legacy_hard_exclusions)
+    book_gate_clause = _book_title_gate_must_not(query_text, cfg)
+    if book_gate_clause is not None:
+        must_not_clauses.append(book_gate_clause)
+    if must_not_clauses:
+        bool_query["must_not"] = must_not_clauses
 
     base_query = {"bool": bool_query}
 

@@ -217,7 +217,7 @@ def test_store_field_included_for_brand_query_segmentation():
     assert "store" in app.search_service.CONFIG.dynamic_intent.aggregation_fields
     payload = app.build_category_discovery_query("nike sneakers")
     assert "by_store" in payload["aggs"]
-    assert payload["aggs"]["by_store"]["terms"]["field"] == "store"
+    assert payload["aggs"]["by_store"]["significant_terms"]["field"] == "store"
 
 
 def test_discovery_query_is_size_zero_with_short_timeout():

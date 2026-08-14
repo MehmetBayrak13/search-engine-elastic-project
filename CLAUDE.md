@@ -1093,6 +1093,54 @@ the *entire* query text equals a store value — useful for a one-word brand
 query, but not for a longer query naming a brand plus a product. The dynamic
 `store` aggregation candidate is what covers that longer-query case.
 
+### `significant_terms`, not plain `terms`
+
+`build_category_discovery_query` aggregates with `significant_terms`
+(foreground-vs-background proportion), not plain `terms` (raw `doc_count`).
+Plain `terms` made the catalog's huge "Books" category win almost every
+generic single-word query — thousands of book titles contain words like
+"computer" or "television", so "Books" always had the highest raw
+`doc_count` even though it's not what the query means, crowding the real
+"Electronics"/"Computers" category out of the top candidates entirely (it
+wasn't just outranked — it was often absent). `significant_terms` scores a
+category by how much MORE common it is among matching documents than in the
+whole index, so a category that's huge everywhere (Books) stops winning by
+default, and a category that's small overall but concentrated in this
+query's matches (Electronics, for an electronics query) scores highest.
+`discover_category_intent` sorts candidates by this `score` when present
+(falling back to `doc_count` for older/mocked `terms`-shaped responses, so
+existing tests don't need a `score` key). This does not make the discovered
+category the top-ranked *search result* by itself — the boost it feeds into
+`_positive_category_should_clauses` is a deliberately small, capped
+reranking nudge (see `intent_ranking.dynamic_category_boost_cap`), not a
+filter — a book whose title literally contains the query word still has its
+own strong direct lexical match. What this fixes is `_apply_dynamic_category_penalty`
+unfairly penalizing the *correct* category (e.g. Electronics) for not being
+in a discovery set that plain `terms` had filled entirely with "Books".
+
+### Book title gate
+
+`book_title_gate` (`config/search_config.json`, `BookTitleGateConfig`,
+`services/search_service.py: _book_title_gate_must_not`) is a **hard**
+`bool.must_not` filter, not a reranking signal — the only category-specific
+hard filter in the codebase besides the legacy `watch`→books exclusion.
+Motivation: a book whose title happens to contain common words (e.g. "Always
+Wear Headphones") legitimately satisfies the normal multi-field lexical
+match for unrelated short queries like "headphones", because the word really
+is in the title — `significant_terms` (above) reduces how often "Books"
+wins the *category boost*, but does nothing to stop a book from matching the
+mandatory lexical gate in the first place. This gate closes that gap
+directly: for any document in `categories` (`books`, `buy a kindle`,
+`audible audiobooks` by default), it is hard-excluded unless the query is
+(near-)identical to the book's full title (`fuzzy` on `title.keyword`,
+which already carries a `lowercase_normalizer` — do not add
+`case_insensitive` to that clause, ES rejects it: "[fuzzy] query does not
+support [case_insensitive]") or the query is the book's exact `parent_asin`
+(`term`, which — unlike `title.keyword` — has no normalizer, so that clause
+keeps its own explicit `case_insensitive: true`). Every other category is
+completely unaffected: the filter only ever evaluates for documents whose
+category matches the configured list.
+
 Do not call normalized category score a probability.
 
 Use honest fields such as:
