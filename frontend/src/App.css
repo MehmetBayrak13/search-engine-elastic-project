@@ -896,7 +896,32 @@
   font-size: 12.5px;
   border-top: 1px solid var(--line);
 }
-.footer b {
+.footer-links {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.footer-link {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--muted);
+  transition: color 150ms ease, border-color 150ms ease, background 150ms ease;
+}
+.footer-link:hover {
+  color: var(--blue);
+  border-color: var(--blue);
+  background: var(--blue-soft);
+}
+.footer-text {
+  margin: 0;
+}
+.footer-text b {
   font-family: var(--font-mono);
   font-weight: 600;
   color: var(--ink);
