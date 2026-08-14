@@ -56,6 +56,11 @@ export function searchProducts({ query, page, enablePhrase, enableMultiMatch, en
     // docstring'i) -- aynı yanıttan, sorguya eklenen `_name`'ler sayesinde okunur.
     // Kart başına "neden bu sonuç?" açıklaması için kullanılır.
     debug_relevance: true,
+    // debug_relevance'ın aksine bu BEDAVA değil -- sunucu tarafında ikinci
+    // bir resolve_intent_signals çağrısı tetikler (bkz. api/main.py yorumu).
+    // "Sorgunu şöyle anladım" şeridi için kullanılır; küçük ama sıfır olmayan
+    // bir maliyet, bilerek kabul edildi.
+    debug_intent: true,
   });
 }
 

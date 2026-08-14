@@ -270,6 +270,7 @@ export default function App() {
             query={result?.query}
             total={result?.total}
             intent={result?.intent}
+            intentDebug={result?.intent_debug}
             hasResults={Boolean(hasHits)}
             sortMode={sortMode}
             onSortChange={handleSortChange}
