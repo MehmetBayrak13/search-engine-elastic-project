@@ -11,10 +11,8 @@
 
     "iskarpin": "ayakkabı",
     "babet": "ayakkabı",
-    "sandalet": "terlik",
     "takunya": "terlik",
     "bere": "şapka",
-    "yağmurluk": "mont",
     "kot": "pantolon",
 
     "turkuaz": "mavi",
@@ -37,8 +35,7 @@
     "tabure": "sandalye",
     "avize": "lamba",
     "çekmece": "dolap",
-    "minder": "yastık",
-    "yorgan": "nevresim"
+    "minder": "yastık"
   },
   "en_synonyms": {
     "sneakers": ["trainers", "athletic shoes"],

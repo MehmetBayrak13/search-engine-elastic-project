@@ -105,8 +105,20 @@ def detect_search_intent(query_text: str) -> dict:
 def _normalize_query_text(query_text: str) -> str:
     """Casefold + tekrarlı boşlukları sadeleştirir (gerçek Türkçe stemming
     Elasticsearch analyzer'ında yapılır; burada yalnızca sözlük araması için
-    normalize edilir)."""
-    return " ".join((query_text or "").casefold().split())
+    normalize edilir).
+
+    Türkçe büyük "İ" önce elle "i"ye çevrilir -- Python'ın `str.casefold()`'ü
+    Unicode'un dil-bağımsız kuralını kullanır ve "İ"yi bir BİRLEŞİK NOKTA
+    karakteriyle ("i" + U+0307) eşler, düz "i" ile DEĞİL (bkz. canlı doğrulama:
+    "İngiliz anahtarı" sözlükte "ingiliz anahtarı" olarak kayıtlı olsa bile
+    hiç eşleşmiyordu). Bu dönüşüm YALNIZCA sözlük anahtarı aramasını
+    etkiler -- gerçek Elasticsearch sorgusu her zaman orijinal `query_text`i
+    kullanır (bkz. `expand_multilingual_query`deki `original`), yani İngilizce
+    bir sorguda yanlışlıkla tetiklenirse tek sonucu sözlükte eşleşme
+    bulunamaması olur (zaten var olan "sözlükte yoksa orijinal sorguyla
+    devam et" güvenli varsayılanıyla aynı)."""
+    text = (query_text or "").replace("İ", "i").replace("I", "ı")
+    return " ".join(text.casefold().split())
 
 
 def _resolve_token_variants(token: str, translations, synonyms) -> tuple[str, ...]:

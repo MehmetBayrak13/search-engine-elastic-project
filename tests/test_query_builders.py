@@ -257,6 +257,18 @@ def test_token_translation_only_query_does_not_crash_and_uses_field_relevance_fi
     assert token_translation_clauses[0]["fields"] == app.CONFIG.field_relevance.es_fields
 
 
+def test_capital_turkish_i_normalizes_before_dictionary_lookup():
+    # Python's str.casefold() maps Turkish "İ" to "i" + a COMBINING DOT
+    # ABOVE (U+0307), not plain "i" -- so a dictionary key like
+    # "ingiliz anahtarı" would never match a query typed as
+    # "İngiliz anahtarı" without the explicit İ->i / I->ı replacement in
+    # _normalize_query_text. This would have silently broken translation
+    # lookup for ANY capitalized Turkish query starting with İ/I, not just
+    # this one phrase.
+    expansion = app.expand_multilingual_query("İngiliz Anahtarı")
+    assert expansion["phrase_translations"] == ["wrench"]
+
+
 def test_english_synonym_expansion_preserves_brand_name():
     # "nike sneakers" -> "sneakers" bir İngilizce eş anlamlı anahtarı
     # ("trainers"e genişler), "nike" sözlükte/eş anlamlı listesinde
