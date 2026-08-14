@@ -221,7 +221,20 @@
     "saklama kutusu": ["storage box", "storage bin"],
     "bebek bezi çantası": ["diaper bag"],
     "marş motoru": ["starter"],
-    "saç tokası": ["hairpin"]
+    "saç tokası": ["hairpin"],
+
+    "dolap içi düzenleyici": ["closet organizer", "cabinet organizer"],
+    "dolap düzenleyici": ["closet organizer", "cabinet organizer"],
+    "raf düzenleyici": ["shelf organizer"],
+    "raf düzenleyicisi": ["shelf organizer"],
+    "çekmece düzenleyici": ["drawer organizer"],
+    "çekmece düzenleyicisi": ["drawer organizer"],
+    "ayakkabı düzenleyici": ["shoe organizer"],
+    "makyaj düzenleyici": ["makeup organizer"],
+    "araç düzenleyici": ["car organizer"],
+    "bagaj düzenleyici": ["trunk organizer", "car organizer"],
+    "masa düzenleyici": ["desk organizer"],
+    "kablo düzenleyici": ["cable organizer"]
   },
   "terms": {
     "kablosuz": ["wireless"],
@@ -754,6 +767,13 @@
     "kağıt": ["paper"],
 
     "anahtarlık": ["keychain"],
-    "anahtarlığı": ["keychain"]
+    "anahtarlığı": ["keychain"],
+
+    "düzenleyici": ["organizer"],
+    "düzenleyicisi": ["organizer"],
+    "bagaj": ["trunk", "luggage"],
+    "bagajı": ["trunk", "luggage"],
+    "iç": ["interior", "inner"],
+    "içi": ["interior", "inner"]
   }
 }
