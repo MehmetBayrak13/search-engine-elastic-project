@@ -244,14 +244,30 @@ def expand_multilingual_query(query_text: str, translations=None, synonyms=None)
     }
 
 
-def _build_translation_lexical_queries(query_text: str) -> list[dict]:
+def _build_translation_lexical_queries(query_text: str, *, name_prefix: str | None = None) -> list[dict]:
     """
     Çeviri sözlüğünden üretilen İngilizce alternatifleri, zorunlu lexical
     eşleşme grubuna (bool.must içindeki bool.should) EK seçenekler olarak
     ekler. Böylece salt Türkçe bir sorgu, İngilizce ürün kataloğunda da
     sonuç bulabilir — çeviri sinyali zorunlu eşleşmeyi atlamaz, ona bir
     alternatif ekler.
-    """
+
+    `name_prefix`: verilirse (yalnızca `include_relevance_debug=True` iken)
+    maddelere `_name` etiketi eklenir. Bunun olmaması "Neden bu sonuç?"
+    panelinde gerçek bir bug'a yol açıyordu: bir ürün YALNIZCA çeviri
+    üzerinden eşleştiyse (ör. "güneş kremi" -> "sunscreen", Türkçe metin
+    hiçbir İngilizce `title`/`title.tr` alanına anlamlı skor veremez)
+    `_build_field_evidence_clauses`'ın isimlendirdiği maddelerin HİÇBİRİ
+    ateşlenmiyordu, `matched_queries` tamamen boş dönüyordu -- panel
+    "Eşleşen alanlar: belirlenemedi / Konsensüs: 0 alan" gösteriyordu,
+    oysa eşleşme tamamen geçerliydi (canlıda doğrulandı: "güneş kremi"
+    8890 sonuç veriyor ama hiçbiri isimlendirilmiş madde taşımıyordu).
+    Fraz çevirisi TEK bir bilinen alanı (`phrase_field` = title) hedeflediği
+    için dürüstçe `field:title` olarak etiketlenir; kelime bazlı çeviri
+    multi_match'i birden fazla alanı (best_fields) birden taradığı için
+    HANGİ alanda eşleştiği bilinemez -- onu belirli bir alanmış gibi
+    etiketlemek yerine ayrı, dürüst bir `translation:token` işaretiyle
+    işaretlenir (bkz. relevance_debug_from_matched_queries)."""
     if not CONFIG or not CONFIG.translation.enabled:
         return []
     if len(_normalize_query_text(query_text)) < CONFIG.translation.min_query_length:
@@ -262,14 +278,16 @@ def _build_translation_lexical_queries(query_text: str) -> list[dict]:
 
     phrase_field = CONFIG.search_methods.phrase.field
     for phrase in expansion["phrase_translations"]:
-        queries.append({
-            "match_phrase": {
-                phrase_field: {"query": phrase, "boost": CONFIG.translation.phrase_boost}
-            }
-        })
+        phrase_params: dict = {"query": phrase, "boost": CONFIG.translation.phrase_boost}
+        if name_prefix:
+            # `_name`, `match`/`match_phrase`in "alan adı anahtar" biçiminde
+            # alan değeri objesinin İÇİNE eklenir (bkz. _build_field_evidence_clauses
+            # aynı desen) -- multi_match'teki gibi üst seviyeye değil.
+            phrase_params["_name"] = f"{name_prefix}:{phrase_field}"
+        queries.append({"match_phrase": {phrase_field: phrase_params}})
 
     if expansion["token_translation_query"]:
-        queries.append({
+        token_clause = {
             "multi_match": {
                 # `token_translation_query`, sözlükte çevirisi olmayan
                 # kelimeleri (ör. marka adı "adidas") OLDUĞU GİBİ korur —
@@ -292,7 +310,14 @@ def _build_translation_lexical_queries(query_text: str) -> list[dict]:
                 # gelir (title/features/description/categories_text + .tr).
                 "fields": CONFIG.field_relevance.es_fields,
             }
-        })
+        }
+        if name_prefix:
+            # `field:X` DEĞİL -- bu best_fields sorgusu title/features/
+            # description/categories_text'i BİRDEN taradığı için ES hangi
+            # alanın kazandığını bildirmez; belirli bir alanmış gibi
+            # etiketlemek yanıltıcı olurdu (bkz. fonksiyon docstring'i).
+            token_clause["multi_match"]["_name"] = "translation:token"
+        queries.append(token_clause)
 
     return queries
 
@@ -1098,6 +1123,13 @@ def relevance_debug_from_matched_queries(matched_queries: list[str] | None, cfg:
         "consensus_level": len(matched_fields),
         "contradictions": contradictions,
         "applied_penalty": applied_penalty,
+        # `translation:token` belirli bir alana bağlanamaz (bkz.
+        # _build_translation_lexical_queries docstring'i -- best_fields
+        # çoklu alan sorgusu) ama en azından "bu ürün çeviri sayesinde
+        # bulundu" bilgisini dürüstçe taşır; `matched_fields` boş kalsa
+        # bile ("belirlenemedi" YERİNE) panelde ayrı bir satır olarak
+        # gösterilir.
+        "translation_matched": "translation:token" in matched,
     }
 
 
@@ -1334,8 +1366,14 @@ def build_search_query(
         return payload
 
     # Çeviri sözlüğünden gelen alternatifler zorunlu eşleşme grubuna eklenir
-    # (bypass etmez — ek bir "veya" seçeneğidir).
-    lexical_queries.extend(_build_translation_lexical_queries(query_text))
+    # (bypass etmez — ek bir "veya" seçeneğidir). `name_prefix` burada TEKRAR
+    # hesaplanır (yukarıdaki `enable_multi_match` bloğu İÇİNDEKİ isim aynı
+    # değişkeni kullanmaz -- o blok hiç çalışmazsa değişken tanımsız kalırdı).
+    lexical_queries.extend(
+        _build_translation_lexical_queries(
+            query_text, name_prefix=("field" if include_relevance_debug else None)
+        )
+    )
 
     # Intent sinyalleri. Çağıran taraf (search_products) zaten
     # resolve_intent_signals ile manuel+dinamik sinyalleri hesaplayıp enjekte

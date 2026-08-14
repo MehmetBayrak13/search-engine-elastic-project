@@ -209,11 +209,14 @@ def test_debug_relevance_true_adds_bounded_relevance_debug(monkeypatch):
     assert "relevance_debug" in body
     assert len(body["relevance_debug"]) == len(body["hits"]) == 1
     entry = body["relevance_debug"][0]
-    assert set(entry.keys()) == {"matched_fields", "consensus_level", "contradictions", "applied_penalty"}
+    assert set(entry.keys()) == {
+        "matched_fields", "consensus_level", "contradictions", "applied_penalty", "translation_matched",
+    }
     assert entry["matched_fields"] == ["title", "features"]
     assert entry["consensus_level"] == 2
     assert entry["contradictions"] == []
     assert entry["applied_penalty"] == 1.0
+    assert entry["translation_matched"] is False
 
 
 def test_debug_relevance_bounded_to_explain_top_n(monkeypatch):

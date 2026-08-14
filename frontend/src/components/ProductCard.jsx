@@ -144,12 +144,19 @@ export default function ProductCard({ product, query, maxScore, explain }) {
             </button>
             {explainOpen && (
               <div className="explain-panel" onClick={(event) => event.stopPropagation()}>
-                <div className="explain-row">
-                  <b>Eşleşen alanlar:</b>{' '}
-                  {explain.matched_fields.length > 0
-                    ? explain.matched_fields.map(fieldLabel).join(', ')
-                    : 'belirlenemedi'}
-                </div>
+                {explain.matched_fields.length > 0 ? (
+                  <div className="explain-row">
+                    <b>Eşleşen alanlar:</b> {explain.matched_fields.map(fieldLabel).join(', ')}
+                  </div>
+                ) : explain.translation_matched ? (
+                  <div className="explain-row">
+                    🌐 <b>Çeviri ile eşleşti</b> — sorgunun İngilizce karşılığı bulundu
+                  </div>
+                ) : (
+                  <div className="explain-row">
+                    Bu ürün sorguyla eşleşti, ancak hangi alanda eşleştiği bu sorguda görüntülenemedi.
+                  </div>
+                )}
                 <div className="explain-row">
                   <b>Konsensüs:</b> {explain.consensus_level} alan
                   {explain.consensus_level >= 2 ? ' — birden fazla alanda eşleşti, skor güçlendirildi' : ''}

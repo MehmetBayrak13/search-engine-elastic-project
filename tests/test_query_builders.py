@@ -820,7 +820,68 @@ def test_relevance_debug_from_matched_queries_empty_input():
     from services.search_service import relevance_debug_from_matched_queries
 
     result = relevance_debug_from_matched_queries([], app.CONFIG)
-    assert result == {"matched_fields": [], "consensus_level": 0, "contradictions": [], "applied_penalty": 1.0}
+    assert result == {
+        "matched_fields": [],
+        "consensus_level": 0,
+        "contradictions": [],
+        "applied_penalty": 1.0,
+        "translation_matched": False,
+    }
+
+
+def test_relevance_debug_reports_translation_match_when_only_translation_fired():
+    # Regresyon: bir ürün YALNIZCA çeviri üzerinden eşleştiyse (ör. "güneş
+    # kremi" -> "sunscreen", Türkçe metin İngilizce title/title.tr
+    # alanlarına anlamlı skor veremez) `_build_field_evidence_clauses`'ın
+    # isimlendirdiği maddelerin hiçbiri ateşlenmiyordu ve panel "Eşleşen
+    # alanlar: belirlenemedi / Konsensüs: 0 alan" gösteriyordu -- oysa
+    # eşleşme geçerliydi (canlıda doğrulandı). `translation:token` artık bu
+    # durumu dürüstçe işaretliyor.
+    from services.search_service import relevance_debug_from_matched_queries
+
+    result = relevance_debug_from_matched_queries(["translation:token"], app.CONFIG)
+    assert result["matched_fields"] == []
+    assert result["consensus_level"] == 0
+    assert result["translation_matched"] is True
+
+
+def test_translation_phrase_clause_is_named_with_real_field_when_debug_enabled():
+    # Fraz çevirisi (ör. "güneş kremi" -> "sunscreen") TEK bir bilinen alanı
+    # (title) hedeflediği için dürüstçe "field:title" olarak etiketlenir --
+    # "translation:*" değil -- böylece matched_fields/consensus_level doğru
+    # şekilde dolar. `_name`, match_phrase'in alan-değeri objesinin İÇİNDE
+    # yaşar (bkz. _build_field_evidence_clauses aynı desen).
+    payload = app.build_search_query("güneş kremi", apply_intent_reranking=False, include_relevance_debug=True)
+    should = _innermost_query(payload["query"])["bool"]["must"][0]["bool"]["should"]
+    phrase_translation_clauses = [
+        c["match_phrase"]["title"] for c in should
+        if c.get("match_phrase", {}).get("title", {}).get("query") in ("sunscreen", "sunblock")
+    ]
+    assert phrase_translation_clauses, "çeviri fraz maddesi bulunamadı"
+    assert all(c.get("_name") == "field:title" for c in phrase_translation_clauses)
+
+
+def test_translation_token_clause_is_named_generically_not_as_a_field():
+    # Kelime bazlı çeviri multi_match'i (best_fields) birden fazla alanı
+    # birden taradığı için "field:title" gibi belirli bir alanmış gibi
+    # etiketlenMEmeli -- ayrı, dürüst bir "translation:token" adı taşır.
+    payload = app.build_search_query("kablosuz", apply_intent_reranking=False, include_relevance_debug=True)
+    should = _innermost_query(payload["query"])["bool"]["must"][0]["bool"]["should"]
+    token_translation_clauses = [
+        c["multi_match"] for c in should if c.get("multi_match", {}).get("query") == "wireless"
+    ]
+    assert len(token_translation_clauses) == 1
+    assert token_translation_clauses[0].get("_name") == "translation:token"
+
+
+def test_translation_clauses_unnamed_when_debug_disabled():
+    # include_relevance_debug=False (varsayılan) iken çeviri maddelerine
+    # hiç `_name` eklenmemeli -- gereksiz payload büyümesi/karmaşıklık.
+    payload = app.build_search_query("güneş kremi", apply_intent_reranking=False)
+    should = _innermost_query(payload["query"])["bool"]["must"][0]["bool"]["should"]
+    phrase_clauses = [c["match_phrase"]["title"] for c in should if "match_phrase" in c]
+    assert phrase_clauses, "çeviri fraz maddesi bulunamadı"
+    assert all("_name" not in c for c in phrase_clauses)
 
 
 def test_sort_relevance_default_omits_sort_key():
