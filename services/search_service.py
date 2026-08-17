@@ -23,6 +23,7 @@ modülü değiştirdiğinde `autocomplete_service`'teki eski kopya etkilenmez.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -50,6 +51,7 @@ __all__ = [
     "SearchResult",
     "detect_search_intent",
     "expand_multilingual_query",
+    "extract_unit_signals",
     "build_category_discovery_query",
     "fetch_category_aggregations",
     "discover_category_intent",
@@ -802,6 +804,94 @@ def _positive_category_should_clauses(positive_categories: tuple[dict, ...]) -> 
     return clauses
 
 
+_UNIT_ALIASES: dict[str, tuple[str, ...]] = {
+    "inch": ("inch", "inches", "in"),
+    "cm": ("cm", "centimeter", "centimeters", "santimetre"),
+    "mm": ("mm", "millimeter", "millimeters"),
+    "ft": ("ft", "feet", "foot"),
+    "kg": ("kg", "kilogram", "kilograms", "kilo"),
+    "g": ("g", "gram", "grams", "gr"),
+    "lb": ("lb", "lbs", "pound", "pounds"),
+    "oz": ("oz", "ounce", "ounces"),
+    "ml": ("ml", "milliliter", "milliliters"),
+    "l": ("l", "liter", "liters", "litre", "litres"),
+    "tb": ("tb", "terabyte", "terabytes"),
+    "gb": ("gb", "gigabyte", "gigabytes"),
+    "mb": ("mb", "megabyte", "megabytes"),
+    "w": ("w", "watt", "watts"),
+    "v": ("v", "volt", "volts"),
+    "mah": ("mah",),
+    "hz": ("hz", "hertz"),
+    "ghz": ("ghz", "gigahertz"),
+}
+_MAX_UNIT_SIGNALS_PER_QUERY = 5
+
+_ALIAS_TO_CANONICAL: dict[str, str] = {
+    alias: canonical for canonical, aliases in _UNIT_ALIASES.items() for alias in aliases
+}
+# Uzun eş anlamlılar önce denenmeli (ör. "inches" "in"den önce eşleşmeli),
+# aksi halde regex alternation en kısa/erken alternatifte durur.
+_UNIT_SIGNAL_RE = re.compile(
+    r"(\d+(?:[.,]\d+)?)\s*(" + "|".join(re.escape(a) for a in sorted(_ALIAS_TO_CANONICAL, key=len, reverse=True)) + r")\b",
+    re.IGNORECASE,
+)
+
+
+def extract_unit_signals(query_text: str) -> list[dict]:
+    """Sorgu metnindeki ölçü/kapasite ifadelerini ("32 inch", "500ml",
+    "1tb") tanır. ES'e istek atmaz, saf ve test edilebilirdir (bkz.
+    `expand_multilingual_query` ile aynı tasarım prensibi). Her eşleşme
+    için, ürün başlıklarında GERÇEKTE görülen yaygın yazım biçimlerini
+    (bitişik/boşluklu/tireli) üretir -- reindex gerektirmez, sorgu
+    zamanında `match_phrase` ile denenir (bkz. `_build_unit_match_should_clauses`).
+    Aynı (sayı, birim) çifti birden fazla kez bulunursa tekilleştirilir;
+    aşırı uzun/karmaşık sorgularda sinyal sayısı sınırlanır (bkz.
+    `_MAX_UNIT_SIGNALS_PER_QUERY`, CLAUDE.md §14 "Avoid combinatorial
+    explosion")."""
+    if not query_text:
+        return []
+    signals: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for match in _UNIT_SIGNAL_RE.finditer(query_text):
+        number = match.group(1)
+        canonical = _ALIAS_TO_CANONICAL[match.group(2).lower()]
+        key = (number, canonical)
+        if key in seen:
+            continue
+        seen.add(key)
+        signals.append({
+            "number": number,
+            "unit": canonical,
+            "surface_forms": (f"{number}{canonical}", f"{number} {canonical}", f"{number}-{canonical}"),
+        })
+        if len(signals) >= _MAX_UNIT_SIGNALS_PER_QUERY:
+            break
+    return signals
+
+
+def _build_unit_match_should_clauses(
+    query_text: str, cfg: "AppConfig", *, debug_names: bool = False
+) -> list[dict]:
+    """Sorguda tespit edilen her ölçü/kapasite sinyali için, `unit_matching.fields`
+    içindeki her alana karşı bir rerank-only `bool.should` maddesi üretir --
+    zorunlu lexical kapıyı hiç etkilemez (CLAUDE.md §9), yalnızca aynı
+    ölçüyü taşıyan ürünleri öne çıkarır. `enabled=false` veya sorgu
+    `min_query_length`in altındaysa boş liste döner (mevcut lexical arama
+    hiç değişmez)."""
+    um = cfg.unit_matching
+    if not um.enabled or len(query_text) < um.min_query_length:
+        return []
+    clauses: list[dict] = []
+    for signal in extract_unit_signals(query_text):
+        for field in um.fields:
+            should = [{"match_phrase": {field: {"query": form}}} for form in signal["surface_forms"]]
+            bool_clause: dict = {"should": should, "minimum_should_match": 1, "boost": um.boost}
+            if debug_names:
+                bool_clause["_name"] = f"unit:{field}"
+            clauses.append({"bool": bool_clause})
+    return clauses
+
+
 def _store_boost_clause(query_text: str, cfg: "AppConfig", *, debug_names: bool = False) -> dict | None:
     """`store` (marka vekili) için düşük ağırlıklı, tek başına YETERSİZ
     yardımcı sinyal (bkz. spec §3/§6). `store` `keyword` tipinde olduğu
@@ -1472,6 +1562,9 @@ def build_search_query(
         ],
     }
     should_clauses = _positive_category_should_clauses(intent_signals.positive_categories)
+    should_clauses.extend(
+        _build_unit_match_should_clauses(query_text, cfg, debug_names=include_relevance_debug)
+    )
     # `field_relevance`'tan turetilen diger her madde (alan-kaniti eslesmeleri,
     # cross_fields fallback) enable_multi_match ile kapatiliyor -- store-boost
     # yardimci maddesi de aynı sekilde bu toggle'a bagli olmalidir, aksi halde

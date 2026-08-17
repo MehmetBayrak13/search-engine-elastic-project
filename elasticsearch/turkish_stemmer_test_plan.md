@@ -1,5 +1,22 @@
 # Türkçe Stemmer — Test Index ve Analyzer Hazırlığı
 
+> **SONUÇ (sonraki bir oturumda çalıştırıldı):** Bu dosyanın önerdiği genel
+> `turkish` stemmer yaklaşımı test edildi ve **reddedildi** — canlı
+> cluster'da ölçüldü: en yaygın 500 markadan 137'si (%27), sıradan İngilizce
+> ürün-açıklama kelimelerinin de ~%30'u genel stemmer tarafından anlamsızca
+> kırpılıyordu (`iPhone→ipho`, `Nike→nik`, `compatible→compatip`,
+> `electric→electri` gibi) — üstelik katalog neredeyse tamamen İngilizce
+> olduğu için (5.9M üründen yalnızca 8'inde gerçek Türkçe metin bulundu),
+> genel stemmer'ın getirisi neredeyse sıfırdı. Bunun yerine, **yalnızca
+> `config/query_translations.json`daki bilinen ~550 Türkçe kelime için**
+> `product_stem_override` kurallarını programatik olarak (çoğul/iyelik ekleri,
+> ünsüz yumuşaması dahil) genişleten, genel stemmer'sız bir yaklaşım
+> uygulandı — İngilizce metne SIFIR risk (override yalnızca tam eşleşen
+> kelimeyi değiştirir, algoritmik kırpma yapmaz). Reindex edildi:
+> `amazon-products-000003`/`-000004` (bkz. README "Elasticsearch indexleri").
+> Aşağıdaki içerik, o kararın öncesindeki orijinal hazırlık planı olarak
+> tarihsel referans için bırakılmıştır.
+
 Bu dosya **yalnızca hazırlıktır**. Aşağıdaki komutlardan hiçbiri bu görev
 kapsamında çalıştırılmadı:
 

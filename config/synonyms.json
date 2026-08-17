@@ -76,6 +76,8 @@
     "diaper": ["nappy"],
     "diapers": ["nappies"],
     "nappy": ["diaper"],
+    "diaperbag": ["nappy bag"],
+    "nappybag": ["diaper bag"],
 
     "handbag": ["purse"],
     "purse": ["handbag"],
@@ -126,6 +128,14 @@
     "shaver": ["razor"],
     "lotion": ["moisturizer"],
     "moisturizer": ["lotion"],
+    "sunscreen": ["sunblock"],
+    "sunblock": ["sunscreen"],
+    "mustache": ["moustache"],
+    "moustache": ["mustache"],
+    "straightener": ["flat iron", "flatiron"],
+    "flatiron": ["straightener"],
+    "eyeglasses": ["glasses", "spectacles"],
+    "spectacles": ["eyeglasses", "glasses"],
 
     "cat": ["kitty"],
     "kitty": ["cat"],
@@ -197,8 +207,9 @@
     "windbreaker": ["windcheater"],
     "windcheater": ["windbreaker"],
     "flipflops": ["flip flops"],
-    "onesie": ["romper", "bodysuit"],
+    "onesie": ["romper", "bodysuit", "babygrow"],
     "romper": ["onesie"],
+    "babygrow": ["onesie"],
     "swimsuit": ["bathing suit"],
     "beanie": ["knit hat", "wool hat"],
     "mittens": ["gloves"],
@@ -217,6 +228,8 @@
     "cot": ["crib"],
     "highchair": ["high chair"],
     "binky": ["pacifier"],
+    "pacifier": ["binky", "dummy"],
+    "dummy": ["pacifier"],
     "babymonitor": ["baby monitor"],
 
     "kennel": ["dog crate"],
@@ -237,7 +250,9 @@
     "windscreen": ["windshield"],
     "tire": ["tyre"],
     "tyre": ["tire"],
-    "muffler": ["exhaust"],
+    "muffler": ["exhaust", "silencer"],
+    "silencer": ["muffler"],
+    "bonnet": ["hood"],
     "carseat": ["car seat"],
 
     "teddybear": ["teddy bear"],
@@ -264,6 +279,7 @@
     "mower": ["lawn mower"],
     "lawnmower": ["lawn mower"],
     "shears": ["clippers"],
+    "clippers": ["shears"],
     "planter": ["plant pot"],
     "birdhouse": ["bird house"],
     "birdfeeder": ["bird feeder"],
@@ -333,6 +349,11 @@
     "babywalker": ["baby walker"],
     "playmat": ["play mat", "activity mat"],
     "teether": ["teething ring"],
-    "babybouncer": ["baby bouncer"]
+    "babybouncer": ["baby bouncer"],
+
+    "scifi": ["science fiction"],
+    "sci-fi": ["science fiction"],
+    "decal": ["sticker"],
+    "decals": ["stickers"]
   }
 }

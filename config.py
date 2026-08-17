@@ -263,6 +263,22 @@ class PopularityRankingConfig:
 
 
 @dataclass(frozen=True)
+class UnitMatchingConfig:
+    """Sorgudaki ölçü/kapasite ifadelerini (ör. "32 inch", "500ml", "1tb")
+    tanıyıp aynı ölçüyü taşıyan ürünleri rerank-only bir `bool.should`
+    maddesiyle öne çıkarır (bkz. `extract_unit_signals`,
+    `_build_unit_match_should_clauses`). Reindex GEREKTİRMEZ — yalnızca
+    sorgu zamanında `fields`teki alanlara karşı `match_phrase` dener,
+    zorunlu lexical kapıyı hiç etkilemez (CLAUDE.md §9 must/should ayrımı).
+    `enabled=false` iken query-building hiçbir şey değiştirmez."""
+
+    enabled: bool
+    fields: tuple[str, ...]
+    boost: float
+    min_query_length: int
+
+
+@dataclass(frozen=True)
 class RatingSortConfig:
     """`sort=rating` seçildiğinde kullanılan Bayesian/IMDB-tarzı ağırlıklı
     puan formülü: `(v/(v+m))*R + (m/(v+m))*C` — burada `v` = `rating_number`,
@@ -591,6 +607,7 @@ class AppConfig:
     dynamic_intent: DynamicIntentConfig
     quality_ranking: QualityRankingConfig
     popularity_ranking: PopularityRankingConfig
+    unit_matching: UnitMatchingConfig
     rating_sort: RatingSortConfig
     alternate_sort: AlternateSortConfig
     accessory_penalty: AccessoryPenaltyConfig
@@ -828,6 +845,17 @@ def _build_popularity_ranking(raw: Any, context: str) -> PopularityRankingConfig
     )
 
 
+def _build_unit_matching(raw: Any, context: str) -> UnitMatchingConfig:
+    raw = _require_dict(raw, context)
+    fields = _require_str_list(raw.get("fields"), f"{context}.fields")
+    return UnitMatchingConfig(
+        enabled=_require_bool(raw.get("enabled"), f"{context}.enabled"),
+        fields=fields,
+        boost=_require_positive_number(raw.get("boost"), f"{context}.boost"),
+        min_query_length=_require_positive_int(raw.get("min_query_length"), f"{context}.min_query_length"),
+    )
+
+
 def _build_rating_sort(raw: Any, context: str) -> RatingSortConfig:
     raw = _require_dict(raw, context)
     prior_rating = _require_positive_number(raw.get("prior_rating"), f"{context}.prior_rating")
@@ -1056,6 +1084,7 @@ def load_search_config(path: Path = SEARCH_CONFIG_PATH) -> AppConfig:
     dynamic_intent = _build_dynamic_intent(raw.get("dynamic_intent"), "dynamic_intent")
     quality_ranking = _build_quality_ranking(raw.get("quality_ranking"), "quality_ranking")
     popularity_ranking = _build_popularity_ranking(raw.get("popularity_ranking"), "popularity_ranking")
+    unit_matching = _build_unit_matching(raw.get("unit_matching"), "unit_matching")
     rating_sort = _build_rating_sort(raw.get("rating_sort"), "rating_sort")
     alternate_sort = _build_alternate_sort(raw.get("alternate_sort"), "alternate_sort")
     accessory_penalty = _build_accessory_penalty(raw.get("accessory_penalty"), "accessory_penalty")
@@ -1103,6 +1132,7 @@ def load_search_config(path: Path = SEARCH_CONFIG_PATH) -> AppConfig:
         dynamic_intent=dynamic_intent,
         quality_ranking=quality_ranking,
         popularity_ranking=popularity_ranking,
+        unit_matching=unit_matching,
         rating_sort=rating_sort,
         alternate_sort=alternate_sort,
         accessory_penalty=accessory_penalty,

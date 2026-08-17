@@ -11,7 +11,7 @@ Tekli mod kullanımı (bir grup: ya rastgele ya da tek sorgu):
 
     python evaluate_quality_sample.py --sample-size 200 --output report.jsonl
     python evaluate_quality_sample.py --query "gaming mouse" --sample-size 50 --output report.csv
-    python evaluate_quality_sample.py --seed 42 --index amazon-products-000001
+    python evaluate_quality_sample.py --seed 42 --index amazon-products-000003
 
 Çoklu grup modu (kalibrasyon için): rastgele bir örneklem + N adet sabit
 sorgu grubunu TEK bir raporda birleştirir, her satırı hangi gruptan geldiğini
@@ -46,7 +46,7 @@ import requests
 
 from product_quality import evaluate_product_quality
 
-DEFAULT_SEARCH_INDICES = "amazon-products-000001,amazon-products-000002"
+DEFAULT_SEARCH_INDICES = "amazon-products-000003,amazon-products-000004"
 DEFAULT_OUTPUT = "quality_sample_report.jsonl"
 REQUEST_TIMEOUT_SECONDS = 30
 

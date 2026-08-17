@@ -92,6 +92,12 @@ def _minimal_search_config(**overrides):
             "factor": 0.03,
             "baseline": 1.0,
         },
+        "unit_matching": {
+            "enabled": True,
+            "fields": ["title", "features"],
+            "boost": 2.5,
+            "min_query_length": 3,
+        },
         "rating_sort": {
             "minimum_votes": 50,
             "prior_rating": 4.0,
@@ -359,6 +365,45 @@ def test_popularity_ranking_negative_baseline_is_rejected(tmp_path):
     path = _write_json(tmp_path / "search_config.json", data)
     with pytest.raises(ConfigError):
         load_search_config(path)
+
+
+def test_unit_matching_loads_from_default_repo_config():
+    app_config = load_search_config()
+    assert app_config.unit_matching.enabled is True
+    assert "title" in app_config.unit_matching.fields
+    assert app_config.unit_matching.boost > 0
+
+
+def test_unit_matching_missing_section_is_rejected(tmp_path):
+    data = _minimal_search_config()
+    del data["unit_matching"]
+    path = _write_json(tmp_path / "search_config.json", data)
+    with pytest.raises(ConfigError):
+        load_search_config(path)
+
+
+def test_unit_matching_empty_fields_is_rejected(tmp_path):
+    data = _minimal_search_config()
+    data["unit_matching"]["fields"] = []
+    path = _write_json(tmp_path / "search_config.json", data)
+    with pytest.raises(ConfigError):
+        load_search_config(path)
+
+
+def test_unit_matching_negative_boost_is_rejected(tmp_path):
+    data = _minimal_search_config()
+    data["unit_matching"]["boost"] = -1
+    path = _write_json(tmp_path / "search_config.json", data)
+    with pytest.raises(ConfigError):
+        load_search_config(path)
+
+
+def test_unit_matching_can_be_disabled(tmp_path):
+    data = _minimal_search_config()
+    data["unit_matching"]["enabled"] = False
+    path = _write_json(tmp_path / "search_config.json", data)
+    app_config = load_search_config(path)
+    assert app_config.unit_matching.enabled is False
 
 
 def test_rating_sort_loads_from_default_repo_config():

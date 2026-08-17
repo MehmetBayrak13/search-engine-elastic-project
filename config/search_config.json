@@ -1,6 +1,6 @@
 {
   "elasticsearch": {
-    "search_indices": ["amazon-products-000001", "amazon-products-000002"],
+    "search_indices": ["amazon-products-000003", "amazon-products-000004"],
     "autocomplete_indices": ["amazon-products-autocomplete-000001", "amazon-products-autocomplete-000002"],
     "search_timeout_seconds": 20,
     "autocomplete_timeout_seconds": 10,
@@ -93,6 +93,12 @@
     "field": "rating_number",
     "factor": 0.03,
     "baseline": 1.0
+  },
+  "unit_matching": {
+    "enabled": true,
+    "fields": ["title", "features"],
+    "boost": 2.5,
+    "min_query_length": 3
   },
   "rating_sort": {
     "minimum_votes": 50,

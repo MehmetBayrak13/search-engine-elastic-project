@@ -315,6 +315,19 @@ def test_new_tr_redirect_reaches_existing_color_translation():
     assert expansion["token_translation_query"] == "red bag"
 
 
+def test_new_en_synonym_pairs_expand_correctly():
+    # Veri odaklı genişletme (bkz. config/synonyms.json) -- kataloğun gerçek
+    # kategori/marka dağılımına göre bulunmuş, ABD/İngiltere terim farkları
+    # ve yaygın alternatif yazımlar dahil.
+    assert "sunblock" in app.expand_multilingual_query("sunscreen")["token_translations"]
+    assert "moustache" in app.expand_multilingual_query("mustache")["token_translations"]
+    assert "dummy" in app.expand_multilingual_query("pacifier")["token_translations"]
+    assert "silencer" in app.expand_multilingual_query("muffler")["token_translations"]
+    assert "hood" in app.expand_multilingual_query("bonnet")["token_translations"]
+    assert "sticker" in app.expand_multilingual_query("decal")["token_translations"]
+    assert app.expand_multilingual_query("scifi")["token_translation_query"] == "science fiction"
+
+
 def test_field_relevance_canonical_field_matches_share_one_canonical_key():
     from services.search_service import _build_field_evidence_clauses
 
@@ -1008,3 +1021,113 @@ def test_min_score_omitted_by_default():
 def test_min_score_included_when_provided():
     payload = app.build_search_query("kamera", min_score=42.5)
     assert payload["min_score"] == 42.5
+
+
+def test_extract_unit_signals_recognizes_common_units():
+    from services.search_service import extract_unit_signals
+
+    signals = extract_unit_signals("32 inch tv")
+    assert len(signals) == 1
+    assert signals[0]["number"] == "32"
+    assert signals[0]["unit"] == "inch"
+    assert set(signals[0]["surface_forms"]) == {"32inch", "32 inch", "32-inch"}
+
+
+def test_extract_unit_signals_normalizes_aliases_to_canonical_unit():
+    from services.search_service import extract_unit_signals
+
+    # "gb"/"gigabyte"/"gigabytes" hepsi aynı kanonik birime ("gb") indirgenmeli.
+    for query in ("128gb", "128 gigabyte", "128 gigabytes"):
+        signals = extract_unit_signals(query)
+        assert signals[0]["unit"] == "gb"
+
+
+def test_extract_unit_signals_returns_empty_for_no_measurement():
+    from services.search_service import extract_unit_signals
+
+    assert extract_unit_signals("bluetooth kulaklık") == []
+    assert extract_unit_signals("") == []
+
+
+def test_extract_unit_signals_deduplicates_and_caps_signal_count():
+    from services.search_service import extract_unit_signals, _MAX_UNIT_SIGNALS_PER_QUERY
+
+    # "32 inch" iki kez geçse bile tek sinyal üretilmeli.
+    signals = extract_unit_signals("32 inch 32 inch")
+    assert len(signals) == 1
+
+    many = " ".join(f"{i} kg" for i in range(1, 20))
+    signals = extract_unit_signals(many)
+    assert len(signals) == _MAX_UNIT_SIGNALS_PER_QUERY
+
+
+def test_unit_match_produces_should_clause_with_configured_boost():
+    payload = app.build_search_query("32 inch monitor", apply_intent_reranking=False)
+    should = _innermost_query(payload["query"])["bool"]["should"]
+    unit_clauses = [c for c in should if any(
+        f.get("match_phrase", {}).get("title", {}).get("query") == "32 inch"
+        for f in c.get("bool", {}).get("should", [])
+    )]
+    assert len(unit_clauses) == 1
+    assert unit_clauses[0]["bool"]["boost"] == app.CONFIG.unit_matching.boost
+
+
+def test_unit_match_covers_all_configured_fields():
+    payload = app.build_search_query(
+        "500ml bottle", apply_intent_reranking=False, include_relevance_debug=True
+    )
+    should = _innermost_query(payload["query"])["bool"]["should"]
+    unit_fields = {
+        c["bool"]["_name"].split(":", 1)[1]
+        for c in should
+        if str(c.get("bool", {}).get("_name", "")).startswith("unit:")
+    }
+    assert unit_fields == set(app.CONFIG.unit_matching.fields)
+
+
+def test_unit_match_does_not_gate_lexical_search():
+    # Ölçü sinyali bool.should'ta (rerank-only) kalmalı, bool.must'taki
+    # zorunlu lexical kapıyı hiç etkilememeli (CLAUDE.md §9).
+    payload = app.build_search_query("32 inch monitor", apply_intent_reranking=False)
+    must = _innermost_query(payload["query"])["bool"]["must"]
+    assert len(must) == 1  # tek zorunlu lexical grup, ölçü maddesi eklenmemiş
+
+
+def test_unit_match_absent_when_no_measurement_in_query():
+    payload = app.build_search_query(
+        "wireless mouse", apply_intent_reranking=False, include_relevance_debug=True
+    )
+    should = _innermost_query(payload["query"])["bool"].get("should", [])
+    assert not any(str(c.get("bool", {}).get("_name", "")).startswith("unit:") for c in should)
+
+
+def test_unit_match_disabled_via_config(tmp_path_factory):
+    import services.search_service as search_service
+
+    data = _repo_search_config_dict()
+    data["unit_matching"]["enabled"] = False
+    path = _tmp_path_config(tmp_path_factory, data)
+    override_config = load_search_config(path)
+
+    payload = search_service.build_search_query(
+        "32 inch monitor", config=override_config, apply_intent_reranking=False
+    )
+    should = _innermost_query(payload["query"])["bool"].get("should", [])
+    assert not any(
+        f.get("match_phrase", {}).get("title", {}).get("query") == "32 inch"
+        for c in should for f in c.get("bool", {}).get("should", [])
+    )
+
+
+def test_unit_match_debug_names_present_only_when_requested():
+    without_debug = app.build_search_query("32 inch monitor", apply_intent_reranking=False)
+    with_debug = app.build_search_query(
+        "32 inch monitor", apply_intent_reranking=False, include_relevance_debug=True
+    )
+
+    def _has_unit_name(payload):
+        should = _innermost_query(payload["query"])["bool"].get("should", [])
+        return any(str(c.get("bool", {}).get("_name", "")).startswith("unit:") for c in should)
+
+    assert _has_unit_name(without_debug) is False
+    assert _has_unit_name(with_debug) is True

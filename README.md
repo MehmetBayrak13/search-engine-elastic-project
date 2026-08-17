@@ -143,9 +143,10 @@ Arama davranışının tamamı `config/` altındaki JSON dosyalarından okunur �
 
 | Dosya | İçerik |
 |---|---|
-| `config/search_config.json` | Index adları, timeout/limit değerleri, exact ASIN / phrase / fuzzy / autocomplete alan ve boost ayarları, **alan bazlı lexical eşleşme + consensus/contradiction ayarları (`field_relevance`, `field_consensus`, `relevance_contradiction`, `relevance_debug` — eski `multi_match` bölümünün YERİNE geçti, bkz. "Alan uzlaşısı ve çelişki tabanlı relevance" bölümü)**, çeviri ayarları, **dinamik kategori keşfi (`dynamic_intent`) ayarları**, **sayfalama (`pagination`) ayarları**, **autocomplete dropdown görsel ayarları (`autocomplete_ui`: panel yüksekliği, satır yüksekliği, görsel gösterme)**, dönen kaynak alanlar, arayüz metinleri |
+| `config/search_config.json` | Index adları, timeout/limit değerleri, exact ASIN / phrase / fuzzy / autocomplete alan ve boost ayarları, **alan bazlı lexical eşleşme + consensus/contradiction ayarları (`field_relevance`, `field_consensus`, `relevance_contradiction`, `relevance_debug` — eski `multi_match` bölümünün YERİNE geçti, bkz. "Alan uzlaşısı ve çelişki tabanlı relevance" bölümü)**, çeviri ayarları, **dinamik kategori keşfi (`dynamic_intent`) ayarları**, **ölçü/kapasite farkındalıklı eşleştirme (`unit_matching`: "32 inch", "500ml", "1tb" gibi ifadeleri tanıyıp aynı ölçüyü taşıyan ürünleri rerank-only olarak öne çıkarır — reindex gerektirmez, bkz. `extract_unit_signals`)**, **sayfalama (`pagination`) ayarları**, **autocomplete dropdown görsel ayarları (`autocomplete_ui`: panel yüksekliği, satır yüksekliği, görsel gösterme)**, dönen kaynak alanlar, arayüz metinleri |
 | `config/intent_rules.json` | **Opsiyonel override katmanı** (örn. `watch`, `iphone_case`, `men_perfume`): alias/tetikleyici terimler (`query_terms`/`all_terms`/`any_terms`), dışlama koşulları (`excluded_when_query_contains`/`excluded_terms`), force-boost terimleri, obje-biçimli `positive_categories`/`negative_categories` (soft penalty), kural bazlı `contradiction_terms` (bkz. "Alan uzlaşısı ve çelişki tabanlı relevance" bölümü), rozet metni/ikonu, `priority`. Boş `{}` da geçerlidir — hiç kural olmadan da çalışır; ana kategori-intent motoru bu dosya DEĞİL, dinamik kategori keşfidir (aşağıya bakın). Bkz. "Kategori + title intent ranking" bölümü. |
-| `config/query_translations.json` | Türkçe ifade/kelime → İngilizce karşılık sözlüğü. Boş `{}` da geçerlidir — çeviri sözlüğü olmadan uygulama, sorguyu değiştirmeden aramaya devam eder. |
+| `config/query_translations.json` | Türkçe ifade/kelime → İngilizce karşılık sözlüğü. Boş `{}` da geçerlidir — çeviri sözlüğü olmadan uygulama, sorguyu değiştirmeden aramaya devam eder. Kapsanmayan kategorileri bulmak için `tools/find_translation_gaps.py` kullanılabilir (READ-ONLY, öneri üretir — otomatik eklemez). |
+| `config/synonyms.json` | İki ayrı sözlük: `tr_redirects` (Türkçe konuşma dili → sözlükteki kanonik Türkçe kelime, örn. `pabuç`→`ayakkabı`) ve `en_synonyms` (aynı dilde İngilizce eş anlamlı genişletme, örn. `sneakers`↔`trainers`, ayrıca ABD/İngiltere terim farkları: `diaper`↔`nappy`, `pacifier`↔`dummy`). Boş `{}` da geçerlidir. |
 | `config/category_taxonomy.json` | `product_quality.py`nin kullandığı genel ürün-ailesi taksonomisi (12 aile: electronics, beauty, books, automotive, home&kitchen, clothing, toys, pet, grocery, sports, tools, office) — title/category terimleri, aliaslar, `conflicting_families`. |
 | `config/quality_config.json` | `product_quality.py` skorlama ağırlıkları/eşikleri, stopword listesi, flag isimleri. |
 
@@ -688,6 +689,10 @@ ve eşikler `config/quality_config.json`dan gelir.
 - **`tools/evaluate_intent_ranking.py`** — kategori + title intent ranking
   için read-only before/after değerlendirme aracı; bkz. yukarıdaki
   "Kategori + title intent ranking" bölümü.
+- **`tools/find_translation_gaps.py`** — `config/query_translations.json`nin
+  kapsamadığı kategorileri (cluster'daki gerçek kategori dağılımına göre)
+  bulan read-only tarama aracı; hiçbir çeviri servisine bağlanmaz, yalnızca
+  bir aday listesi üretir — nihai kararı hâlâ bir insan verir.
 
 Index mapping/analyzer tanımları (Edge NGram, Türkçe analyzer vb.) bu depoda
 değil, doğrudan Elastic Cloud cluster'ında (Kibana Dev Tools üzerinden)
@@ -698,9 +703,13 @@ tutulur.
 Normal arama:
 
 ```text
-amazon-products-000001
-amazon-products-000002
+amazon-products-000003
+amazon-products-000004
 ```
+
+`amazon-products-000001`/`-000002` (önceki analyzer'la, `product_stem_override`
+genişletmesi öncesi) cluster'da hâlâ duruyor — anlık geri dönüş için bilinçli
+olarak silinmedi, ama uygulama artık bunları kullanmıyor.
 
 Autocomplete (Edge NGram):
 
