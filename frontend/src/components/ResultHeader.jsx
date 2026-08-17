@@ -98,7 +98,7 @@ export default function ResultHeader({
             onClick={onToggleSidebar}
             aria-expanded={sidebarOpen}
           >
-            {sidebarOpen ? '‹ Ayarları gizle' : '› Ayarları göster'}
+            {sidebarOpen ? '‹ Gelişmiş ayarları gizle' : '⚙ Gelişmiş ayarlar'}
           </button>
         </div>
       </div>

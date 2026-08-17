@@ -1,7 +1,7 @@
-export default function Hero({ hero, children }) {
+export default function Hero({ hero, compact, children }) {
   if (!hero) return null;
   return (
-    <section className="hero">
+    <section className={`hero${compact ? ' hero-compact' : ''}`}>
       <h1 className="hero-title">{hero.title}</h1>
       <p className="hero-sub">{hero.subtitle}</p>
       <div className="search-deck">{children}</div>

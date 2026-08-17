@@ -4,7 +4,6 @@ import Topbar from './components/Topbar';
 import Hero from './components/Hero';
 import SidebarSettings from './components/SidebarSettings';
 import SearchBox from './components/SearchBox';
-import FeatureChips from './components/FeatureChips';
 import EmptyState from './components/EmptyState';
 import ZeroResults from './components/ZeroResults';
 import ResultHeader from './components/ResultHeader';
@@ -55,6 +54,10 @@ export default function App() {
   const [resultFlagsSig, setResultFlagsSig] = useState(null);
   const [searchError, setSearchError] = useState(null);
   const [loading, setLoading] = useState(false);
+  // Hero, arama TETİKLENDİĞİ anda (sonuç gelmeden önce, `loading` başlar
+  // başlamaz) küçülsün diye ayrı bir state -- `result`a bağlı olsaydı
+  // hata/boş sonuç durumlarında hero yanlışlıkla tekrar büyürdü.
+  const [hasSearched, setHasSearched] = useState(false);
 
   const resultsTopRef = useRef(null);
 
@@ -81,6 +84,7 @@ export default function App() {
 
     setLoading(true);
     setSearchError(null);
+    setHasSearched(true);
     const startedAt = performance.now();
     try {
       const data = await searchProducts({
@@ -177,6 +181,7 @@ export default function App() {
     setResult(null);
     setCurrentPage(1);
     setSortMode('relevance');
+    setHasSearched(false);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -215,7 +220,7 @@ export default function App() {
     <div className="page">
       <Topbar hero={config.hero} esOk={esOk} statusLabels={config.labels} onGoHome={handleGoHome} />
 
-      <Hero hero={config.hero}>
+      <Hero hero={config.hero} compact={hasSearched}>
         <div className="search-row">
           <SearchBox
             value={searchBoxValue}
@@ -237,8 +242,6 @@ export default function App() {
             {config.labels.search_button}
           </button>
         </div>
-
-        <FeatureChips labels={config.labels} flags={flags} liveSuggestions={liveSuggestions} />
 
         {config.example_queries?.length > 0 && (
           <p className="hero-hint">
