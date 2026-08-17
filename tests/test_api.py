@@ -197,8 +197,12 @@ def test_debug_relevance_absent_by_default(monkeypatch):
 
 
 def test_debug_relevance_true_adds_bounded_relevance_debug(monkeypatch):
-    hit = _hit()
-    hit["matched_queries"] = ["field:title", "field:features"]
+    # `compute_relevance_explain` artık ES'in `matched_queries`sine değil,
+    # hit'in `_source` metnine bakar (bkz. services/search_service.py
+    # docstring'i) — bu yüzden hit'in title/features alanları sorgu
+    # kelimelerini gerçekten içermeli.
+    hit = _hit(title="Wireless Mouse")
+    hit["_source"]["features"] = "Ergonomic wireless mouse with adjustable DPI"
     _mock_post_search(
         monkeypatch,
         ({"hits": {"hits": [hit], "total": {"value": 1}}}, None),
@@ -236,18 +240,15 @@ def test_debug_relevance_bounded_to_explain_top_n(monkeypatch):
 
 
 def test_debug_relevance_reports_contradiction_penalty(monkeypatch):
-    hit = _hit()
-    # A real ES response for 2 conflicting counted_fields also carries the
-    # "contradiction_tier:mild" _name (config's minimum_conflicting_fields is
-    # 2 — see _apply_relevance_contradiction), since that tier filter's
-    # minimum_should_match is satisfied by these same two field clauses.
-    # Simulating the field-level names without the tier name would not be a
-    # realistic ES response, and relevance_debug_from_matched_queries is
-    # deliberately designed to read the tier name rather than recompute the
-    # penalty from a field count (see its docstring).
-    hit["matched_queries"] = [
-        "field:title", "contradiction:description", "contradiction:features", "contradiction_tier:mild",
-    ]
+    # "men perfume" -> intent_rules.json'daki "men_perfume" kuralını tetikler
+    # (contradiction_terms: moisturizer, body lotion, ...). description ve
+    # features bu terimlerden birer tanesini taşıyor (2 alan -> mild tier).
+    # `compute_relevance_explain` bu çelişkiyi ES'in `matched_queries`sinden
+    # değil, hit'in `_source` metninden hesaplar (bkz. o fonksiyonun
+    # docstring'i).
+    hit = _hit(title="Men's Cologne Perfume Spray")
+    hit["_source"]["description"] = "Daily moisturizer for men"
+    hit["_source"]["features"] = "Body lotion set included"
     _mock_post_search(
         monkeypatch,
         ({"hits": {"hits": [hit], "total": {"value": 1}}}, None),

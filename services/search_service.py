@@ -56,7 +56,7 @@ __all__ = [
     "resolve_intent_signals",
     "build_search_query",
     "search_products",
-    "relevance_debug_from_matched_queries",
+    "compute_relevance_explain",
     "SORT_MODES",
 ]
 
@@ -267,7 +267,14 @@ def _build_translation_lexical_queries(query_text: str, *, name_prefix: str | No
     multi_match'i birden fazla alanı (best_fields) birden taradığı için
     HANGİ alanda eşleştiği bilinemez -- onu belirli bir alanmış gibi
     etiketlemek yerine ayrı, dürüst bir `translation:token` işaretiyle
-    işaretlenir (bkz. relevance_debug_from_matched_queries)."""
+    işaretlenir.
+
+    NOT: "Neden bu sonuç?" paneli artık bu `_name` etiketlerine değil,
+    `compute_relevance_explain`'in `_source` metnini doğrudan karşılaştırmasına
+    dayanıyor (bkz. o fonksiyonun docstring'i — ES'in `matched_queries`
+    mekanizması bu uygulamanın 6 katmanlı function_score zincirinde
+    güvenilmez çıktı). Etiketler yine de query-shape testleri ve olası
+    ileri-düzey `_explain` teşhisi için burada bırakıldı, zararsızdır."""
     if not CONFIG or not CONFIG.translation.enabled:
         return []
     if len(_normalize_query_text(query_text)) < CONFIG.translation.min_query_length:
@@ -1096,24 +1103,96 @@ def _book_title_gate_must_not(query_text: str, cfg: "AppConfig") -> dict | None:
     }
 
 
-def relevance_debug_from_matched_queries(matched_queries: list[str] | None, cfg: "AppConfig") -> dict:
-    """ES'in native `_name`/`matched_queries` mekanizmasından (bkz.
-    build_search_query(include_relevance_debug=True), spec §8 — canlı
-    cluster'da doğrulandı: function_score `filter` içindeki `_name`'ler de
-    `hit['matched_queries']`'e yansıyor) türetilmiş SAF bir özetleme
-    fonksiyonu. Hiçbir alan burada YENİDEN TAHMİN edilmez — yalnızca
-    sorgunun kendisinin GERÇEKTEN eşleştirdiği adlandırılmış maddeler
-    okunur; `_explain` çağrısı YAPILMAZ (bkz. spec §11 performans notu —
-    bu fonksiyon ekstra bir ES isteği gerektirmez, aynı `_search`
-    yanıtından okunur)."""
-    matched = set(matched_queries or [])
-    matched_fields = [f for f in cfg.field_consensus.counted_fields if f"field:{f}" in matched]
-    contradictions = [f for f in cfg.relevance_contradiction.counted_fields if f"contradiction:{f}" in matched]
+def _source_field_text(source: dict, canonical_field: str) -> str:
+    """`canonical_field` (title/features/description/categories_text) için
+    `_source`ten düz metin çıkarır. `categories_text` kendi başına bir
+    `_source` alanı DEĞİLDİR (yalnızca indekslenen, `categories`/
+    `main_category`/`source_category`ten türetilen bir `copy_to` hedefi
+    olduğu düşünülüyor -- `source_fields.search`te yok, bkz. config/
+    search_config.json) -- o yüzden en yakın yaklaşıklığı bu üç alanı
+    birleştirerek elde ederiz. `features`/`description` genelde madde
+    listesi (list[str]) olarak saklanır, tek bir metne birleştirilir."""
+    if canonical_field == "categories_text":
+        parts: list[str] = []
+        categories = source.get("categories")
+        if isinstance(categories, list):
+            parts.extend(str(c) for c in categories)
+        elif categories:
+            parts.append(str(categories))
+        for extra_field in ("main_category", "source_category"):
+            value = source.get(extra_field)
+            if value:
+                parts.append(str(value))
+        return " ".join(parts)
+
+    value = source.get(canonical_field)
+    if isinstance(value, list):
+        return " ".join(str(v) for v in value)
+    return str(value or "")
+
+
+def _text_contains_variant(field_text_casefold: str, variant: str) -> bool:
+    """`variant`in (2+ karakterlik) her kelimesi `field_text_casefold`te
+    GEÇİYOR mu -- ES'in `operator: and` davranışına kabaca denk düşen,
+    saf Python substring kontrolü (fuzzy edit-distance'ı simüle ETMEZ,
+    yalnızca "bu metin bu kelimeleri içeriyor mu" sorusuna cevap verir;
+    amaç ES'in tam eşleşme mantığını yeniden üretmek değil, kullanıcıya
+    dürüst ve anlaşılır bir özet vermektir)."""
+    if not variant:
+        return False
+    words = [w for w in variant.casefold().split() if len(w) > 2] or [variant.casefold()]
+    return all(w in field_text_casefold for w in words)
+
+
+def compute_relevance_explain(hit: dict, query_text: str, cfg: "AppConfig") -> dict:
+    """"Neden bu sonuç?" panelinin veri kaynağı. ES'in `_name`/`matched_queries`
+    mekanizmasına HİÇ bağımlı DEĞİLDİR -- bkz. canlı doğrulama: aynı
+    isimlendirilmiş sorgu maddeleri çıplak bir bool sorguda 20/20 güvenilir
+    çalışıyordu, bu uygulamanın 6 katmanlı function_score zincirinin
+    (field_consensus -> relevance_contradiction -> dynamic_category_penalty
+    -> accessory_penalty -> quality_ranking -> popularity_ranking) İÇİNE
+    sarmalanınca ~4/6'ya düşüyordu (ES/Lucene'in kendi iç davranışı, bu
+    projenin sorgu mantığında bir hata değil). Bunu ES sorgu yapısını
+    (6 katmanı TEK bir function_score'a "flatten" etmek gibi) değiştirerek
+    "kaynağında" düzeltmek, her biri kendi score_mode'una (max/min/sum)
+    sahip 6 test edilmiş sıralama özelliğini riske atardı -- ikincil bir
+    debug paneli için orantısız bir risk. Onun yerine dönen belgenin
+    GERÇEK `_source` metnini (+ `expand_multilingual_query`nin ürettiği
+    çeviri varyantlarını) Python tarafında karşılaştırıp aynı bilgiyi
+    ES'e hiç sormadan, deterministik biçimde üretir -- sıralama sorgusuna
+    SIFIR etkisi vardır, salt-okunur bir özetleme fonksiyonudur."""
+    source = hit.get("_source", {})
+    expansion = expand_multilingual_query(query_text)
+    original_variant = expansion["normalized_query"] or expansion["original_query"]
+    translated_variants = list(expansion["phrase_translations"]) + list(expansion["token_translations"])
+
+    matched_fields: list[str] = []
+    translation_only = False
+    for field in cfg.field_consensus.counted_fields:
+        field_text = _source_field_text(source, field).casefold()
+        matched_original = _text_contains_variant(field_text, original_variant)
+        matched_translation = any(_text_contains_variant(field_text, v) for v in translated_variants)
+        if matched_original or matched_translation:
+            matched_fields.append(field)
+        if matched_translation and not matched_original:
+            translation_only = True
 
     rc = cfg.relevance_contradiction
-    if "contradiction_tier:strong" in matched:
+    # Yalnızca elle yazılmış (intent_rules.json) kuralların contradiction_terms'i
+    # -- dinamik keşif GEREKMEZ, bu yüzden ekstra bir ES isteği YOKTUR (aynı
+    # build_search_query'nin saf/varsayılan çağrı yolunun kullandığı manuel-
+    # yalnızca çözümleme, bkz. modül docstring'i).
+    intent_signals = intent_service.resolve_intent_signals(query_text, [], INTENT_RULES, [], config=cfg)
+    contradictions: list[str] = []
+    if intent_signals.contradiction_terms:
+        for field in rc.counted_fields:
+            field_text = _source_field_text(source, field).casefold()
+            if any(term.casefold() in field_text for term in intent_signals.contradiction_terms):
+                contradictions.append(field)
+
+    if len(contradictions) >= rc.strong_conflicting_fields:
         applied_penalty = rc.strong_penalty
-    elif "contradiction_tier:mild" in matched:
+    elif len(contradictions) >= rc.minimum_conflicting_fields:
         applied_penalty = rc.mild_penalty
     else:
         applied_penalty = 1.0
@@ -1123,13 +1202,7 @@ def relevance_debug_from_matched_queries(matched_queries: list[str] | None, cfg:
         "consensus_level": len(matched_fields),
         "contradictions": contradictions,
         "applied_penalty": applied_penalty,
-        # `translation:token` belirli bir alana bağlanamaz (bkz.
-        # _build_translation_lexical_queries docstring'i -- best_fields
-        # çoklu alan sorgusu) ama en azından "bu ürün çeviri sayesinde
-        # bulundu" bilgisini dürüstçe taşır; `matched_fields` boş kalsa
-        # bile ("belirlenemedi" YERİNE) panelde ayrı bir satır olarak
-        # gösterilir.
-        "translation_matched": "translation:token" in matched,
+        "translation_matched": translation_only,
     }
 
 

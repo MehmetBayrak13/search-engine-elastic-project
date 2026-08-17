@@ -132,14 +132,14 @@ def build_field_relevance_variant_configs() -> tuple[AppConfig, AppConfig]:
 def run_variant(query: str, variant_config: AppConfig, label: str) -> list[dict]:
     """Yalnızca `search_service.search_products` çağırır (read-only `_search`
     isteği) — başka hiçbir Elasticsearch işlemi tetiklemez.
-    `include_relevance_debug=True` ES'e EK bir istek YAPTIRMAZ (bkz.
-    `relevance_debug_from_matched_queries` docstring'i) — yalnızca sorguya
-    `_name` ekler, aynı `_search` yanıtından `matched_queries` okunur."""
+    `compute_relevance_explain` ES'e EK bir istek YAPTIRMAZ (bkz. o
+    fonksiyonun docstring'i) — aynı `_search` yanıtındaki hit'in `_source`
+    metnini sorguyla Python tarafında karşılaştırır."""
     result = search_service.search_products(query, config=variant_config, include_relevance_debug=True)
     rows = []
     for rank, hit in enumerate(result.hits or [], start=1):
         source = hit.get("_source", {})
-        debug = search_service.relevance_debug_from_matched_queries(hit.get("matched_queries"), variant_config)
+        debug = search_service.compute_relevance_explain(hit, query, variant_config)
         rows.append({
             "query": query,
             "variant": label,

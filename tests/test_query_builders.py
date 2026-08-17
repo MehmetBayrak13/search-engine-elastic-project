@@ -780,46 +780,79 @@ def test_store_boost_clause_lives_only_in_outer_should_not_in_function_score_fil
         assert not _has_store_field_clause(filt), f"store field should not appear in filters, but found in: {json.dumps(filt)[:200]}"
 
 
-def test_relevance_debug_from_matched_queries_counts_fields():
-    from services.search_service import relevance_debug_from_matched_queries
+def test_compute_relevance_explain_counts_fields():
+    # ES'in matched_queries mekanizması bu uygulamanın 6 katmanlı
+    # function_score zincirinde güvenilmez çıktığı için (bkz.
+    # compute_relevance_explain docstring'i) artık hit'in `_source` metni
+    # doğrudan sorgu kelimeleriyle karşılaştırılır.
+    from services.search_service import compute_relevance_explain
 
-    matched = ["field:title", "field:features", "field:cross_fields", "field:store"]
-    result = relevance_debug_from_matched_queries(matched, app.CONFIG)
+    hit = {
+        "_source": {
+            "title": "Wireless Mouse Ergonomic",
+            "features": "Wireless mouse with adjustable DPI",
+            "description": "A great accessory for your desk.",
+            "categories_text": "",
+        }
+    }
+    result = compute_relevance_explain(hit, "wireless mouse", app.CONFIG)
     assert set(result["matched_fields"]) == {"title", "features"}
     assert result["consensus_level"] == 2
     assert result["contradictions"] == []
     assert result["applied_penalty"] == 1.0
 
 
-def test_relevance_debug_from_matched_queries_mild_tier_penalty():
-    from services.search_service import relevance_debug_from_matched_queries
+def test_compute_relevance_explain_mild_tier_penalty():
+    from services.search_service import compute_relevance_explain
 
-    matched = ["field:title", "contradiction:description", "contradiction:features", "contradiction_tier:mild"]
-    result = relevance_debug_from_matched_queries(matched, app.CONFIG)
+    # "men perfume" -> intent_rules.json'daki "men_perfume" kuralını tetikler
+    # (contradiction_terms: moisturizer, body lotion, ...). description ve
+    # features bu terimlerden birer tanesini taşıyor (2 alan -> mild tier).
+    hit = {
+        "_source": {
+            "title": "Men's Cologne Perfume Spray",
+            "features": "Body lotion set included",
+            "description": "Daily moisturizer for men",
+            "main_category": "Fragrance",
+        }
+    }
+    result = compute_relevance_explain(hit, "men perfume", app.CONFIG)
     assert set(result["contradictions"]) == {"description", "features"}
     assert result["applied_penalty"] == app.CONFIG.relevance_contradiction.mild_penalty
 
 
-def test_relevance_debug_from_matched_queries_strong_tier_overrides_mild():
-    from services.search_service import relevance_debug_from_matched_queries
+def test_compute_relevance_explain_strong_tier_overrides_mild():
+    from services.search_service import compute_relevance_explain
 
-    # ES evaluates both tier filters independently — when 3+ fields conflict,
-    # BOTH "contradiction_tier:mild" (>=2) and "contradiction_tier:strong" (>=3)
-    # match simultaneously (score_mode: min picks strong at query time; this
-    # helper must reproduce that same "strong wins" precedence when reading
-    # matched_queries back, since both names can legitimately co-occur).
-    matched = [
-        "contradiction:description", "contradiction:features", "contradiction:categories_text",
-        "contradiction_tier:mild", "contradiction_tier:strong",
-    ]
-    result = relevance_debug_from_matched_queries(matched, app.CONFIG)
+    # description/features/categories_text üçü de contradiction_terms'ten
+    # birini taşıyor (3 alan -> strong tier, mild değil). categories_text
+    # gerçek bir _source alanı değildir, `categories`/`main_category`/
+    # `source_category`'den yeniden inşa edilir (bkz. _source_field_text).
+    hit = {
+        "_source": {
+            "title": "Men's Cologne Perfume Spray",
+            "features": "Body lotion set included",
+            "description": "Daily moisturizer for men",
+            "categories": ["Sunscreen and skincare"],
+        }
+    }
+    result = compute_relevance_explain(hit, "men perfume", app.CONFIG)
+    assert len(result["contradictions"]) >= 3
     assert result["applied_penalty"] == app.CONFIG.relevance_contradiction.strong_penalty
 
 
-def test_relevance_debug_from_matched_queries_empty_input():
-    from services.search_service import relevance_debug_from_matched_queries
+def test_compute_relevance_explain_no_match():
+    from services.search_service import compute_relevance_explain
 
-    result = relevance_debug_from_matched_queries([], app.CONFIG)
+    hit = {
+        "_source": {
+            "title": "Unrelated Product",
+            "features": "",
+            "description": "",
+            "categories_text": "",
+        }
+    }
+    result = compute_relevance_explain(hit, "wireless mouse", app.CONFIG)
     assert result == {
         "matched_fields": [],
         "consensus_level": 0,
@@ -829,19 +862,27 @@ def test_relevance_debug_from_matched_queries_empty_input():
     }
 
 
-def test_relevance_debug_reports_translation_match_when_only_translation_fired():
+def test_compute_relevance_explain_reports_translation_match_when_only_translation_fired():
     # Regresyon: bir ürün YALNIZCA çeviri üzerinden eşleştiyse (ör. "güneş
     # kremi" -> "sunscreen", Türkçe metin İngilizce title/title.tr
-    # alanlarına anlamlı skor veremez) `_build_field_evidence_clauses`'ın
-    # isimlendirdiği maddelerin hiçbiri ateşlenmiyordu ve panel "Eşleşen
-    # alanlar: belirlenemedi / Konsensüs: 0 alan" gösteriyordu -- oysa
-    # eşleşme geçerliydi (canlıda doğrulandı). `translation:token` artık bu
-    # durumu dürüstçe işaretliyor.
-    from services.search_service import relevance_debug_from_matched_queries
+    # alanlarına anlamlı skor veremez) panel "Eşleşen alanlar: belirlenemedi
+    # / Konsensüs: 0 alan" gösteriyordu -- oysa eşleşme geçerliydi (canlıda
+    # doğrulandı: "güneş kremi" -> "sunscreen"). Yeni Python-taraflı
+    # compute_relevance_explain, çeviri eşleşen alanı da doğru şekilde
+    # matched_fields'a ekler (ES'in aksine) ve translation_matched=True
+    # işaretler.
+    from services.search_service import compute_relevance_explain
 
-    result = relevance_debug_from_matched_queries(["translation:token"], app.CONFIG)
-    assert result["matched_fields"] == []
-    assert result["consensus_level"] == 0
+    hit = {
+        "_source": {
+            "title": "SPF 50 Sunscreen Lotion",
+            "features": "",
+            "description": "",
+            "categories_text": "",
+        }
+    }
+    result = compute_relevance_explain(hit, "güneş kremi", app.CONFIG)
+    assert result["matched_fields"] == ["title"]
     assert result["translation_matched"] is True
 
 

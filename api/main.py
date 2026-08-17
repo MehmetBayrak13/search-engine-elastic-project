@@ -236,13 +236,15 @@ def search(
         }
 
     if debug_relevance:
-        # `result.hits` her zaman ham ES hit sözlükleridir (bkz. SearchResult);
-        # `matched_queries` yalnızca include_relevance_debug=True iken (yukarıda)
-        # sorguya eklenen `_name`'ler sayesinde ES tarafından doldurulur — ekstra
-        # bir istek YOKTUR (bkz. relevance_debug_from_matched_queries docstring'i).
+        # `result.hits` her zaman ham ES hit sözlükleridir (bkz. SearchResult).
+        # ES'in `matched_queries`/`_name` mekanizmasına HİÇ bağımlı DEĞİLDİR --
+        # bkz. compute_relevance_explain docstring'i (bu uygulamanın 6 katmanlı
+        # function_score zincirinde o mekanizma güvenilmez çıktı). Ekstra bir
+        # ES isteği YOKTUR, yalnızca aynı `_search` yanıtındaki `_source`
+        # metni Python tarafında karşılaştırılır.
         top_n = config.relevance_debug.explain_top_n
         response_payload["relevance_debug"] = [
-            search_service.relevance_debug_from_matched_queries(hit.get("matched_queries"), config)
+            search_service.compute_relevance_explain(hit, query_text, config)
             for hit in (result.hits or [])[:top_n]
         ]
 

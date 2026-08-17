@@ -67,13 +67,20 @@ def test_build_field_relevance_variant_configs_isolates_new_flags():
 
 
 def test_run_variant_includes_relevance_debug_columns(monkeypatch):
+    # `compute_relevance_explain` artık `matched_queries`e değil, hit'in
+    # `_source` metnine bakar (bkz. services/search_service.py) — bu yüzden
+    # sahte hit'in title/features alanları sorgu kelimelerini gerçekten
+    # içermeli.
     def fake_search_products(query_text, config=None, include_relevance_debug=False, **kwargs):
         from services.search_models import SearchResult
         return SearchResult(
             hits=[{
                 "_score": 4.2,
-                "_source": {"title": "Wireless Mouse X", "main_category": "Computers"},
-                "matched_queries": ["field:title", "field:features"],
+                "_source": {
+                    "title": "Wireless Mouse X",
+                    "main_category": "Computers",
+                    "features": "Ergonomic wireless mouse with adjustable DPI",
+                },
             }],
             total=1, error=None, current_page=1, page_size=20, total_pages=1,
             start_item=1, end_item=1, has_previous=False, has_next=False,
