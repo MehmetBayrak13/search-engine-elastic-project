@@ -72,10 +72,10 @@
 
 /* ============ HERO ============ */
 .hero {
-  background: radial-gradient(1100px 420px at 78% -80px, rgba(244, 120, 10, 0.07), transparent 60%),
-    radial-gradient(900px 460px at 12% 120%, rgba(22, 103, 199, 0.08), transparent 65%),
-    linear-gradient(160deg, #eef3f9 0%, #e6edf6 100%);
-  color: var(--ink);
+  background: radial-gradient(1100px 420px at 78% -80px, rgba(244, 120, 10, 0.16), transparent 60%),
+    radial-gradient(900px 460px at 12% 120%, rgba(30, 90, 143, 0.5), transparent 65%),
+    linear-gradient(160deg, var(--navy-900) 20%, var(--navy-700) 100%);
+  color: #fff;
   padding: 56px 28px 84px;
   text-align: center;
   position: relative;
@@ -94,7 +94,7 @@
 .hero-sub {
   margin: 14px auto 0;
   max-width: 560px;
-  color: var(--muted);
+  color: #c6d5e4;
   font-size: 16px;
   transition: opacity 180ms ease, margin 220ms ease, max-height 220ms ease;
 }
@@ -134,7 +134,7 @@
   gap: 0;
   background: var(--surface);
   border-radius: 16px;
-  box-shadow: 0 10px 30px rgba(15, 30, 50, 0.1);
+  box-shadow: 0 12px 40px rgba(5, 18, 33, 0.35);
   padding: 6px;
   align-items: stretch;
 }
@@ -169,8 +169,8 @@
   flex-shrink: 0;
   border: 0;
   border-radius: 12px;
-  background: var(--navy-700);
-  color: #fff;
+  background: var(--cta);
+  color: var(--cta-ink);
   font-weight: 700;
   font-size: 16px;
   padding: 0 34px;
@@ -178,7 +178,8 @@
   white-space: nowrap;
 }
 .search-button:hover {
-  background: var(--navy-900);
+  background: var(--cta-hover);
+  color: #fff;
 }
 .search-button:active {
   transform: scale(0.98);
@@ -257,20 +258,20 @@
 .hero-hint {
   margin-top: 18px;
   font-size: 13px;
-  color: var(--muted);
+  color: #9fb4c8;
   transition: opacity 180ms ease, max-height 220ms ease, margin 220ms ease;
 }
 .hero-hint button {
   border: 0;
   background: transparent;
-  color: var(--cta-hover);
+  color: #ffc98f;
   font-weight: 600;
   font-size: 13px;
   text-decoration: underline;
   text-underline-offset: 3px;
 }
 .hero-hint button:hover {
-  color: var(--navy-900);
+  color: #fff;
 }
 .hero.hero-compact .hero-hint {
   max-height: 0;
