@@ -1,11 +1,10 @@
 """Basit process-içi TTL cache.
 
-`app.py`'deki `st.cache_data(ttl=...)` sarmalayıcılarının FastAPI
-karşılığı: aynı `(args, kwargs)` için sonucu `ttl_seconds` boyunca saklar.
-Streamlit'e özgü değildir; yalnızca stdlib `time`/`threading`/`collections`
-kullanır. Süreç yeniden başladığında (deploy, reload) sıfırlanır — bu,
-önbelleğin zaten "en fazla ttl_seconds kadar bayat" olmasına göre kabul
-edilebilir.
+FastAPI backend'inin (`api/main.py`) kullandığı önbellekleme mekanizması:
+aynı `(args, kwargs)` için sonucu `ttl_seconds` boyunca saklar. Yalnızca
+stdlib `time`/`threading`/`collections` kullanır. Süreç yeniden başladığında
+(deploy, reload) sıfırlanır — bu, önbelleğin zaten "en fazla ttl_seconds
+kadar bayat" olmasına göre kabul edilebilir.
 
 `max_entries`: bu fonksiyon `/api/search` ve `/api/autocomplete`de
 DOĞRUDAN kullanıcı girdisi olan `q` metnini (bkz. api/main.py

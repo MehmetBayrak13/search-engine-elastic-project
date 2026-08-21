@@ -47,7 +47,13 @@ def _minimal_search_config(**overrides):
                 "boost": 1,
                 "fields": {"title": 6},
             },
-            "autocomplete": {"field": "title.autocomplete", "operator": "and"},
+            "autocomplete": {
+                "field": "title.autocomplete",
+                "operator": "and",
+                "fuzzy_fallback_enabled": True,
+                "fuzzy_fallback_field": "title",
+                "fuzzy_fallback_boost": 0.5,
+            },
         },
         "translation": {
             "enabled": True,
@@ -97,6 +103,20 @@ def _minimal_search_config(**overrides):
             "fields": ["title", "features"],
             "boost": 2.5,
             "min_query_length": 3,
+        },
+        "result_diversification": {
+            "enabled": True,
+            "significant_word_count": 5,
+        },
+        "price_extraction": {
+            "enabled": True,
+        },
+        "spell_suggest": {
+            "enabled": True,
+            "field": "title",
+            "max_hits_to_trigger": 3,
+            "min_score": 0.6,
+            "suggestion_size": 1,
         },
         "rating_sort": {
             "minimum_votes": 50,
@@ -329,7 +349,7 @@ def test_quality_ranking_loads_from_default_repo_config():
 def test_app_config_has_quality_ranking_field():
     # Regresyon: AppConfig.quality_ranking eksikse CONFIG.quality_ranking
     # erişimi "'AppConfig' object has no attribute 'quality_ranking'" ile
-    # çöker (bkz. app.py: build_category_discovery_query).
+    # çöker (bkz. services/search_service.py: build_category_discovery_query).
     app_config = load_search_config()
     assert hasattr(app_config, "quality_ranking")
     assert app_config.quality_ranking.enabled is False
@@ -404,6 +424,56 @@ def test_unit_matching_can_be_disabled(tmp_path):
     path = _write_json(tmp_path / "search_config.json", data)
     app_config = load_search_config(path)
     assert app_config.unit_matching.enabled is False
+
+
+def test_result_diversification_loads_from_default_repo_config():
+    app_config = load_search_config()
+    assert app_config.result_diversification.enabled is True
+    assert app_config.result_diversification.significant_word_count > 0
+
+
+def test_result_diversification_missing_section_is_rejected(tmp_path):
+    data = _minimal_search_config()
+    del data["result_diversification"]
+    path = _write_json(tmp_path / "search_config.json", data)
+    with pytest.raises(ConfigError):
+        load_search_config(path)
+
+
+def test_price_extraction_loads_from_default_repo_config():
+    app_config = load_search_config()
+    assert app_config.price_extraction.enabled is True
+
+
+def test_price_extraction_missing_section_is_rejected(tmp_path):
+    data = _minimal_search_config()
+    del data["price_extraction"]
+    path = _write_json(tmp_path / "search_config.json", data)
+    with pytest.raises(ConfigError):
+        load_search_config(path)
+
+
+def test_spell_suggest_loads_from_default_repo_config():
+    app_config = load_search_config()
+    assert app_config.spell_suggest.enabled is True
+    assert app_config.spell_suggest.field
+    assert app_config.spell_suggest.max_hits_to_trigger > 0
+
+
+def test_spell_suggest_missing_section_is_rejected(tmp_path):
+    data = _minimal_search_config()
+    del data["spell_suggest"]
+    path = _write_json(tmp_path / "search_config.json", data)
+    with pytest.raises(ConfigError):
+        load_search_config(path)
+
+
+def test_spell_suggest_negative_min_score_is_rejected(tmp_path):
+    data = _minimal_search_config()
+    data["spell_suggest"]["min_score"] = -1
+    path = _write_json(tmp_path / "search_config.json", data)
+    with pytest.raises(ConfigError):
+        load_search_config(path)
 
 
 def test_rating_sort_loads_from_default_repo_config():

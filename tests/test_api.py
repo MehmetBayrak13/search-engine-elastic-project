@@ -4,7 +4,7 @@ istek atılmaz — `services.search_service._post_search` mock'lanır (aynı
 desen `tests/test_pagination.py`de kullanılır).
 
 Bu backend hiçbir arama/autocomplete iş mantığı içermez; tamamı
-`services/` katmanındadır (Streamlit UI'ının kullandığıyla AYNI kod
+`services/` katmanındadır (React/Streamlit farketmeksizin AYNI kod
 yolu) — bu testler yalnızca HTTP sözleşmesini (status kodları, response
 şekli, query param -> servis çağrısı eşlemesi) doğrular.
 """

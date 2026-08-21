@@ -1,8 +1,8 @@
 """
 `services/` katmanının mimari kurallarını doğrular:
-  - Streamlit'e bağımlı değil (import yok, session_state yok)
+  - Herhangi bir UI framework'üne bağımlı değil (import yok, state yönetimi yok)
   - Önbellekleme DI (dependency injection) ile enjekte edilir, servis
-    modülleri kendi başlarına Streamlit cache decorator'ı içermez
+    modülleri kendi başlarına bir cache decorator'ı içermez
   - `autocomplete_service`, `search_service`e MODÜL REFERANSIYLA bağımlı
     (`from ... import X` değil) — aksi halde test/monkeypatch'lerin
     `search_service` üzerinde yaptığı değişiklikler görünmez olur
@@ -97,7 +97,7 @@ def test_autocomplete_service_references_search_service_via_module_not_from_impo
 
 
 def test_fetch_category_aggregations_is_uncached_by_default():
-    # Servis katmanında @st.cache_data OLMAMALI — önbellekleme app.py'de yapılır.
+    # Servis katmanında bir cache decorator'ı OLMAMALI — önbellekleme api/main.py'de yapılır.
     assert not hasattr(search_service.fetch_category_aggregations, "clear")
 
 

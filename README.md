@@ -6,14 +6,17 @@ fuzzy arama; Edge NGram autocomplete; Elasticsearch aggregation tabanlı
 dinamik kategori keşfi; opsiyonel manuel intent override katmanı; `from + size`
 tabanlı sayfalama ve Türkçe→İngilizce sorgu genişletme destekler.
 
-Uygulamanın **birincil** arayüzü artık ayrı bir **React frontend +
-FastAPI backend** ikilisidir (`frontend/`, `api/`) — bkz. "React + FastAPI"
-bölümü hemen aşağıda. Arama/autocomplete/intent/çeviri/kategori-keşif
-mantığının TAMAMI `services/` katmanında yaşar ve Streamlit'e hiçbir zaman
-bağımlı olmadığı için hem eski Streamlit arayüzü (`app.py`, hâlâ çalışır
-durumda, referans/yedek olarak repoda kalır) hem de yeni FastAPI backend'i
-BİREBİR AYNI kod yolunu kullanır — iki arayüz arasında arama davranışı
-sapması yoktur.
+Uygulamanın arayüzü bir **React frontend + FastAPI backend** ikilisidir
+(`frontend/`, `api/`). Arama/autocomplete/intent/çeviri/kategori-keşif
+mantığının TAMAMI `services/` katmanında yaşar; bu katman herhangi bir UI
+framework'üne bağımlı değildir (bkz. `services/search_service.py` modül
+docstring'i).
+
+Proje daha önce (Streamlit destekli) ayrı bir arayüz de içeriyordu; bu
+arayüz kullanımdan kalktığı için (`app.py`, `components/search_input/`,
+`requirements.txt`) kaldırıldı — arama mantığının tamamı zaten
+`services/`de yaşadığından bu kaldırma React+FastAPI'nin davranışını
+etkilemez.
 
 ## React + FastAPI (yeni — birincil arayüz)
 
@@ -69,14 +72,13 @@ dosya sunucusuna/CDN'e deploy edilebilir; bkz. aşağıdaki "Deploy" bölümü).
 | `GET /api/search?q=&page=&enable_phrase=&enable_multi_match=&enable_fuzzy=&enable_exact_asin=` | `search_service.search_products` sonucu (hits her biri `product_url` dahil hazır JSON) |
 | `GET /api/autocomplete?q=` | `autocomplete_service.get_suggestions` sonucu |
 
-Önbellekleme: `api/cache.py`deki basit process-içi TTL cache, `app.py`deki
-`st.cache_data(ttl=...)` sarmalayıcılarının doğrudan karşılığıdır (aynı TTL
-değerleri, aynı config kaynağı).
+Önbellekleme: `api/cache.py`deki basit, process-içi, LRU tahliyeli TTL
+cache — config'ten gelen TTL değerlerini kullanır (bkz. `api/cache.py`
+docstring'i: sabit `max_entries` üst sınırı, sınırsız büyümeyi önler).
 
 ### Deploy
 
-Backend ve frontend AYRI süreçler/deploy hedefleridir (Streamlit Community
-Cloud'un tek-tık deploy'unun yerini tutan tek bir hedef yoktur):
+Backend ve frontend AYRI süreçler/deploy hedefleridir:
 
 1. **Backend** (`api/`) — herhangi bir Python/ASGI hosting'ine
    (`uvicorn api.main:app`) deploy edilebilir. `ELASTICSEARCH_URL`,
@@ -95,51 +97,20 @@ Cloud'un tek-tık deploy'unun yerini tutan tek bir hedef yoktur):
 Bu üç adım hiçbiri bu görev kapsamında otomatik yapılmadı; hiçbiri geri
 alınamaz/ücretli bir işlem içermeyen "sadece kod" adımı değildir.
 
-## Streamlit arayüzü (eski/referans, hâlâ çalışır)
-
-Aşağıdaki "Kurulum ve çalıştırma" bölümünden itibaren anlatılanlar Streamlit
-arayüzüne (`app.py`) aittir. Kaldırılmadı — `services/`/`config/` katmanı
-paylaşıldığından bakımı ekstra yük getirmez ve React frontend'in davranışını
-doğrulamak için referans olarak kullanılabilir.
-
-## Kurulum ve çalıştırma
-
-```bash
-pip install -r requirements.txt
-```
-
-Elastic Cloud bağlantı bilgilerini ortam değişkeni olarak tanımlayın:
-
-```bash
-# Linux / macOS
-export ELASTICSEARCH_URL="https://<deployment>.es.<region>.cloud.es.io"
-export ELASTICSEARCH_API_KEY="<api_key>"
-
-# Windows (PowerShell)
-$env:ELASTICSEARCH_URL="https://<deployment>.es.<region>.cloud.es.io"
-$env:ELASTICSEARCH_API_KEY="<api_key>"
-```
-
-Uygulamayı başlatın:
-
-```bash
-streamlit run app.py
-```
-
 ## Testler
 
 ```bash
-python -m py_compile app.py config.py services/search_models.py services/search_service.py services/autocomplete_service.py components/search_input/__init__.py
+python -m py_compile config.py services/search_models.py services/search_service.py services/autocomplete_service.py api/main.py api/cache.py
 python -m pytest -q
 ```
 
 ## Yapılandırma
 
 Sırlar (`ELASTICSEARCH_URL`, `ELASTICSEARCH_API_KEY`) her zaman ortam
-değişkeninden veya Streamlit Secrets'tan gelir; asla dosyaya yazılmaz.
+değişkeninden gelir; asla dosyaya yazılmaz.
 
 Arama davranışının tamamı `config/` altındaki JSON dosyalarından okunur —
-`app.py` içinde index adı, boost değeri veya arayüz metni hardcoded değildir:
+kodda index adı, boost değeri veya arayüz metni hardcoded değildir:
 
 | Dosya | İçerik |
 |---|---|
@@ -163,9 +134,10 @@ varsayılan):
 
 Yapılandırma değişikliği sonrası:
 
-- **Lokal**: Streamlit'i yeniden başlatın (hot reload yoktur).
-- **Deployment**: commit + push, Streamlit Community Cloud otomatik yeniden
-  dağıtır.
+- **Lokal**: backend'i (`uvicorn`) yeniden başlatın (hot reload yalnızca
+  `--reload` bayrağıyla çalışır).
+- **Deployment**: commit + push, backend hosting'inin kendi otomatik
+  deploy mekanizması yeniden dağıtır.
 
 Uygulama içinden config değiştirilemez; arama ayarları paneli yalnızca hangi
 lexical yöntemlerin (phrase/multi-match/fuzzy/exact ASIN) ve canlı önerilerin
@@ -217,7 +189,7 @@ aşağıdaki `title_ranking.exact_field` (`title.keyword`) zaten canlı index'te
 mevcuttu.
 
 - **`services/intent_service.py`** — SAF bir modül (Elasticsearch isteği
-  atmaz, Streamlit'e/`session_state`e bağımlı değildir):
+  atmaz, herhangi bir UI framework'üne/state yönetimine bağımlı değildir):
   - `IntentSignals` (frozen dataclass): `positive_categories`,
     `negative_categories`, `matched_rule_ids`, `legacy_hard_exclusions`,
     `debug` alanlarını taşır. `legacy_hard_exclusions` hazır ES `must_not`
@@ -500,59 +472,6 @@ ile sunulur (`config/search_config.json:pagination`):
   olsa da (yakalanan herhangi bir hata sessizce yutulur) sayfalama normal
   çalışmaya devam eder.
 
-## Arama kutusu ve canlı öneriler (`components/search_input`)
-
-Arama kutusu ve autocomplete dropdown'u tek bir Streamlit custom component'i
-(`components/search_input/`) tarafından render edilir. Daha önce kullanılan
-`streamlit-keyup` bağımlılığı ve onun üzerine kurulu bir JS "bridge" hack'i
-(Enter'ı yakalamak için parent iframe'e erişip Ara butonunu programatik
-tıklatan best-effort script) **tamamen kaldırıldı** — `st_keyup` paketinin
-tek/son sürümü (0.3.0) `onkeyup`'ta her tuş için (Enter dahil) birebir aynı
-şekilde değer bildiriyordu, Enter'ı diğer tuşlardan ayıran bir sinyal yoktu;
-bu da hem Enter'ın güvenilmez çalışmasına hem de kırılgan bir hack'e yol
-açıyordu.
-
-Yerine, build-step gerektirmeyen (st_keyup'ın kendi yaklaşımıyla aynı,
-saf HTML/JS) yerel bir component geldi:
-
-- `components/search_input/frontend/index.html` — tek görünür kutu + altında
-  Chrome/Google tarzı tek bir öneri paneli (kompakt satırlar: görsel, başlık,
-  gri meta satırı, hover highlight, ellipsis, yukarı/aşağı ok + Enter ile
-  klavye navigasyonu, Escape ile kapatma). Kendi `keydown` olayını yalnızca
-  KENDİ iframe'i içinde dinler — parent iframe'e erişim veya başka bir
-  Streamlit widget'ını programatik tıklatma YOKTUR.
-- Python ↔ JS arasında sabit bir JSON event sözleşmesi vardır (bkz.
-  `components/search_input/CONTRACT.md`):
-  `{"type": "typing"|"submit"|"select", "query": str, "event_id": str, "asin": str|None}`.
-  `event_id` her olayda benzersizdir; Streamlit aynı değeri iki kez
-  görürse rerun atlayabileceğinden bu, aynı sorgunun art arda iki kez
-  aranması gibi durumlarda bile bir rerun'un kaçmamasını garanti eder.
-- `app._handle_search_input_event`, bu olayı işler: **"submit"** (panelde
-  aktif öneri yokken Enter) ve **"select"** (bir öneriye tıklama VEYA
-  panelde aktif öneri varken Enter) `_trigger_explicit_search`/`_select_query`
-  üzerinden **Ara butonuyla TAMAMEN AYNI** state geçişini kullanır. **"typing"**
-  hiçbir zaman aramayı tetiklemez — yalnızca canlı öneri panelinin
-  güncellenmesi için güncel metni bildirir. Aynı `event_id` tekrar
-  görülürse (component'le ilgisiz bir rerun) hiçbir şey yeniden tetiklenmez.
-- Component tek başına hiçbir arama/autocomplete iş mantığı içermez
-  (Elasticsearch sorgusu yok, config okuma yok, session_state yok); yalnızca
-  generic olayları Python'a bildirir. Arama/autocomplete mantığı
-  `services/` katmanındadır (aşağıya bakın) ve yalnızca `app.py` üzerinden
-  kullanılır — component'in kendisi bu servisleri DOĞRUDAN çağırmaz.
-  Bu ayrım, `frontend/`in ileride bir React build'iyle değiştirilmesini
-  (aynı sözleşme korunarak) kolaylaştırır.
-- Panelin görsel ayarları (`panel_max_height_px`, `row_height_px`,
-  `show_images`) `config/search_config.json:autocomplete_ui`den gelir; öneri
-  sayısı `limits.autocomplete_display_size`den gelir (değişmedi).
-
-**Bilinen davranış**: `search_input` component'i tek bir Streamlit widget
-olduğundan (aynı `key` ile bir run içinde iki kez çağrılamaz), yeni
-hesaplanan öneriler aynı run'da component'in `suggestions` prop'una geri
-beslenemez; `app.main()` bunları `session_state`e yazıp tek bir ekstra
-(Elasticsearch isteği İÇERMEYEN) `st.rerun()` ile bir sonraki run'a taşır.
-Bu, panelin her zaman en son yazılan metne ait önerileri göstermesini
-garanti eder.
-
 ## Ürün veri kalitesi / title-category tutarlılığı (`product_quality.py`)
 
 `product_quality.py`, tek tek ürün türüne özel intent kuralı yazmadan,
@@ -588,7 +507,7 @@ ve eşikler `config/quality_config.json`dan gelir.
   (`apply_quality_evaluation`). Hata durumunda importu durdurmaz; güvenli
   fallback (`data_quality_score=0.5`, flag `quality_evaluation_failed`)
   uygulanır ve hata loglanır. Checkpoint/resume davranışı değişmedi.
-- **Arama entegrasyonu**: `app.py`, `config/search_config.json:quality_ranking`
+- **Arama entegrasyonu**: `services/search_service.py`, `config/search_config.json:quality_ranking`
   (varsayılan `enabled:false` — production index'lerinde henüz kalite
   alanı yok) açıkken normal arama sorgusunu bir `function_score` ile
   sarmalar (`field_value_factor` boost + eşik-altı `filter`+`weight`
@@ -619,14 +538,15 @@ ve eşikler `config/quality_config.json`dan gelir.
   (`discover_category_intent`, `build_category_discovery_query`,
   `build_dynamic_category_boosts`, `resolve_intent_signals`), Türkçe→İngilizce
   sorgu genişletme (`expand_multilingual_query`), kalite reranking ve
-  `search_products` (ES'e giden GERÇEK istek). **Streamlit'e bağımlı
-  DEĞİLDİR** (import yok, `session_state` yok) — ileride bir FastAPI
-  endpoint'i de aynı fonksiyonları doğrudan çağırabilir. Önbellekleme
-  (`st.cache_data`) burada değil `app.py`de yapılır: `discover_category_intent`/
+  `search_products` (ES'e giden GERÇEK istek). **Herhangi bir UI
+  framework'üne bağımlı DEĞİLDİR** (import yok, session state yok) —
+  `api/main.py` aynı fonksiyonları doğrudan çağırır. Önbellekleme burada
+  değil çağıran katmanda yapılır: `discover_category_intent`/
   `search_products`, `fetch_aggregations` adlı bir dependency-injection
   parametresi kabul eder — varsayılanı önbelleksiz gerçek Elasticsearch
-  çağrısıdır, `app.py` kendi cache'li sarmalayıcısını (`app._fetch_category_aggregations`)
-  enjekte ederek üretimdeki önbellekleme davranışını korur.
+  çağrısıdır, `api/main.py` kendi cache'li sarmalayıcısını (bkz.
+  `api/cache.py: ttl_cache`) enjekte ederek üretimdeki önbellekleme
+  davranışını sağlar.
 
   Zorunlu eşleşme her zaman `bool.must` içindeki lexical `bool.should`
   grubundadır; intent/kategori boostları (manuel + dinamik) yalnızca dış
@@ -653,23 +573,12 @@ ve eşikler `config/quality_config.json`dan gelir.
   (`build_autocomplete_query`) ve öneri listesi üretimi (`get_suggestions`,
   `SuggestionItem` listesi döner). `search_service`e her zaman MODÜL
   REFERANSIYLA bağımlıdır (`from services import search_service`, `from
-  services.search_service import X` DEĞİL) — aksi halde testlerin/`app.py`nin
+  services.search_service import X` DEĞİL) — aksi halde testlerin
   `search_service` üzerinde yaptığı config/mock değişiklikleri bu modülden
-  görünmez olurdu. Streamlit'e bağımlı değildir.
+  görünmez olurdu.
 - **`services/search_models.py`** — `SearchResult`, `SuggestionItem`,
   `PaginationLimitError`: iki servis modülü arasında paylaşılan, JSON-safe
   (yalnızca primitive/list/dict alanlar) veri sözleşmeleri.
-- **`components/search_input/`** — arama kutusu + autocomplete dropdown
-  custom component'i (bkz. yukarıdaki "Arama kutusu ve canlı öneriler"
-  bölümü). UI-only; hiçbir arama iş mantığı içermez.
-- **`app.py`** — Streamlit arayüzü ve `session_state` orkestrasyonu.
-  Yukarıdaki `services`/`components` paketlerini çağıran ince bir katmandır;
-  test/geri-uyum kolaylığı için `services.search_service`/`autocomplete_service`nin
-  üst seviye fonksiyonlarını kendi isim alanında da re-export eder (ör.
-  `app.build_search_query(...)` doğrudan çalışır), ama GERÇEK çağrılar
-  (`main()` içinde) önbellekli fetcher'ları enjekte etmek için her zaman
-  `search_service.X(...)`/`autocomplete_service.X(...)` şeklinde modül
-  referansıyla yapılır.
 - **`config.py`** — config dosyalarının yükleme/doğrulama katmanı
   (`quality_ranking`, `autocomplete_ui` dahil).
 - **`product_quality.py`** — ürün veri kalitesi / title-category tutarlılığı

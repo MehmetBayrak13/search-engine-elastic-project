@@ -18,8 +18,7 @@
 Bu dosya yalnızca HTTP sözleşmesi + CORS + önbellekleme yapar. Sorgu
 oluşturma/intent/çeviri/kategori-keşif mantığının tamamı
 `services/search_service.py` ve `services/autocomplete_service.py`da
-yaşar (Streamlit UI'ının kullandığıyla AYNI kod yolu) — bkz. CLAUDE.md
-"Search app" mimari bölümü.
+yaşar — bkz. CLAUDE.md "Search app" mimari bölümü.
 """
 
 from __future__ import annotations
@@ -59,8 +58,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# `app.py`deki `_fetch_category_aggregations` / `_fetch_suggestion_hits`
-# st.cache_data sarmalayıcılarının karşılığı — aynı TTL'ler config'ten.
+# Kategori keşfi / autocomplete önbellek TTL'leri config'ten (bkz.
+# `api/cache.py: ttl_cache`).
 _DISCOVERY_CACHE_TTL = CONFIG.dynamic_intent.cache_ttl_seconds if CONFIG else 300
 _AUTOCOMPLETE_CACHE_TTL = CONFIG.limits.autocomplete_cache_ttl_seconds if CONFIG else 30
 
@@ -217,6 +216,7 @@ def search(
         "has_previous": result.has_previous,
         "has_next": result.has_next,
         "intent": intent_payload,
+        "did_you_mean": result.did_you_mean,
     }
 
     if debug_intent:

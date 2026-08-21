@@ -14,21 +14,21 @@ import dataclasses
 
 import pytest
 
-import app
+from services import autocomplete_service, search_service
 
 _DISCOVERY_RESPONSE = ({}, None)
 
 
 @pytest.fixture(autouse=True)
 def _restore_config():
-    original = app.search_service.CONFIG
+    original = search_service.CONFIG
     yield
-    app.search_service.CONFIG = original
+    search_service.CONFIG = original
 
 
 def _with_alternate_sort(**overrides):
-    alt = dataclasses.replace(app.search_service.CONFIG.alternate_sort, **overrides)
-    return dataclasses.replace(app.search_service.CONFIG, alternate_sort=alt)
+    alt = dataclasses.replace(search_service.CONFIG.alternate_sort, **overrides)
+    return dataclasses.replace(search_service.CONFIG, alternate_sort=alt)
 
 
 def _mock_sequenced_post_search(monkeypatch, responses):
@@ -40,7 +40,7 @@ def _mock_sequenced_post_search(monkeypatch, responses):
         calls.append(payload)
         return responses[len(calls) - 1]
 
-    monkeypatch.setattr(app.search_service, "_post_search", fake_post_search)
+    monkeypatch.setattr(search_service, "_post_search", fake_post_search)
     return calls
 
 
@@ -49,7 +49,7 @@ def test_relevance_sort_makes_no_probe_request(monkeypatch):
         monkeypatch,
         [_DISCOVERY_RESPONSE, ({"hits": {"hits": [], "total": {"value": 0}, "max_score": None}}, None)],
     )
-    app.search_products("kamera", page=1, sort="relevance")
+    search_service.search_products("kamera", page=1, sort="relevance")
     assert len(calls) == 2  # discovery + asıl arama, probe YOK
     assert "min_score" not in calls[-1]
 
@@ -63,13 +63,13 @@ def test_rating_sort_probes_then_applies_min_score(monkeypatch):
             ({"hits": {"hits": [], "total": {"value": 0}}}, None),
         ],
     )
-    app.search_products("kamera", page=1, sort="rating")
+    search_service.search_products("kamera", page=1, sort="rating")
     assert len(calls) == 3  # discovery + probe + asıl arama
     probe_payload, real_payload = calls[-2], calls[-1]
     assert "sort" not in probe_payload  # probe her zaman relevance (sort anahtarı yok)
     assert probe_payload["size"] == 1
     assert "sort" in real_payload
-    ratio = app.search_service.CONFIG.alternate_sort.min_score_ratio
+    ratio = search_service.CONFIG.alternate_sort.min_score_ratio
     assert real_payload["min_score"] == pytest.approx(1000.0 * ratio)
 
 
@@ -82,17 +82,17 @@ def test_price_sort_also_probes(monkeypatch):
             ({"hits": {"hits": [], "total": {"value": 0}}}, None),
         ],
     )
-    app.search_products("kamera", page=1, sort="price-asc")
+    search_service.search_products("kamera", page=1, sort="price-asc")
     assert len(calls) == 3
-    assert calls[-1]["min_score"] == pytest.approx(200.0 * app.search_service.CONFIG.alternate_sort.min_score_ratio)
+    assert calls[-1]["min_score"] == pytest.approx(200.0 * search_service.CONFIG.alternate_sort.min_score_ratio)
 
 
 def test_alternate_sort_disabled_skips_probe_and_min_score(monkeypatch):
-    app.search_service.CONFIG = _with_alternate_sort(enabled=False)
+    search_service.CONFIG = _with_alternate_sort(enabled=False)
     calls = _mock_sequenced_post_search(
         monkeypatch, [_DISCOVERY_RESPONSE, ({"hits": {"hits": [], "total": {"value": 0}}}, None)]
     )
-    app.search_products("kamera", page=1, sort="rating")
+    search_service.search_products("kamera", page=1, sort="rating")
     assert len(calls) == 2  # discovery + asıl arama, probe YOK
     assert "min_score" not in calls[-1]
 
@@ -108,7 +108,7 @@ def test_probe_failure_does_not_block_real_search(monkeypatch):
             ({"hits": {"hits": [], "total": {"value": 0}}}, None),
         ],
     )
-    result = app.search_products("kamera", page=1, sort="rating")
+    result = search_service.search_products("kamera", page=1, sort="rating")
     assert len(calls) == 3
     assert "min_score" not in calls[-1]
     assert result.error is None
@@ -125,5 +125,5 @@ def test_probe_none_max_score_skips_min_score(monkeypatch):
             ({"hits": {"hits": [], "total": {"value": 0}}}, None),
         ],
     )
-    app.search_products("kamera", page=1, sort="rating")
+    search_service.search_products("kamera", page=1, sort="rating")
     assert "min_score" not in calls[-1]

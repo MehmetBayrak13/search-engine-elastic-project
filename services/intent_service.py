@@ -1,8 +1,8 @@
 """
 Kategori + title niyet (intent) sinyallerini SAF biçimde çözümler.
 
-Bu modül Elasticsearch'e istek ATMAZ, Streamlit'e bağımlı DEĞİLDİR,
-`session_state` kullanmaz. `services/search_service.py`, dinamik kategori
+Bu modül Elasticsearch'e istek ATMAZ, herhangi bir UI framework'üne
+bağımlı DEĞİLDİR. `services/search_service.py`, dinamik kategori
 keşfinin ES aggregation çağrısını KENDİSİ yapar (I/O burada değil orada),
 sonucu (`discovered_categories`) ve çeviri varyantlarını
 (`translated_queries`) burada tanımlı `resolve_intent_signals`'a girdi

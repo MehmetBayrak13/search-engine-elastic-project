@@ -1,7 +1,8 @@
 import json
 from pathlib import Path
 
-import app
+from services import autocomplete_service, search_service
+
 from config import clear_config_cache, load_search_config
 
 
@@ -57,9 +58,9 @@ def test_no_lexical_methods_returns_match_none():
     # must also be turned off to exercise the true "no lexical method"
     # safety net.
     no_title_ranking_cfg = replace(
-        app.CONFIG, title_ranking=replace(app.CONFIG.title_ranking, enabled=False)
+        search_service.CONFIG, title_ranking=replace(search_service.CONFIG.title_ranking, enabled=False)
     )
-    payload = app.build_search_query(
+    payload = search_service.build_search_query(
         "kamera",
         enable_phrase=False,
         enable_multi_match=False,
@@ -71,7 +72,7 @@ def test_no_lexical_methods_returns_match_none():
 
 
 def test_lexical_queries_live_under_bool_must():
-    payload = app.build_search_query("kamera", apply_intent_reranking=False)
+    payload = search_service.build_search_query("kamera", apply_intent_reranking=False)
     must = _innermost_query(payload["query"])["bool"]["must"]
     assert len(must) == 1
     assert "should" in must[0]["bool"]
@@ -79,7 +80,7 @@ def test_lexical_queries_live_under_bool_must():
 
 
 def test_intent_boosts_live_under_outer_should():
-    payload = app.build_search_query("smartwatch")
+    payload = search_service.build_search_query("smartwatch")
     should = _innermost_query(payload["query"])["bool"].get("should", [])
     assert should, "watch intent sorgusu için should boostları bekleniyor"
     # Category boosts (from watch intent) are match_phrase, but store_boost is a match clause
@@ -90,7 +91,7 @@ def test_intent_boosts_live_under_outer_should():
 
 
 def test_intent_exclusions_live_under_must_not():
-    payload = app.build_search_query("smartwatch")
+    payload = search_service.build_search_query("smartwatch")
     must_not = _innermost_query(payload["query"])["bool"].get("must_not", [])
     assert must_not, "watch niyeti için kitap dışlaması bekleniyor"
 
@@ -108,15 +109,15 @@ def _non_book_gate_must_not(query_node):
 
 
 def test_watch_book_query_does_not_exclude_books():
-    payload = app.build_search_query("watch book")
+    payload = search_service.build_search_query("watch book")
     assert not _non_book_gate_must_not(_innermost_query(payload["query"]))
 
 
 def test_exact_asin_field_and_boost_come_from_config():
-    payload = app.build_search_query("B000123456", apply_intent_reranking=False)
+    payload = search_service.build_search_query("B000123456", apply_intent_reranking=False)
     lexical = _innermost_query(payload["query"])["bool"]["must"][0]["bool"]["should"]
-    field = app.CONFIG.search_methods.exact_asin.field
-    boost = app.CONFIG.search_methods.exact_asin.boost
+    field = search_service.CONFIG.search_methods.exact_asin.field
+    boost = search_service.CONFIG.search_methods.exact_asin.boost
     # `term` clauses also come from the independent title_ranking exact tier
     # (title.keyword), so filter for the exact-ASIN field specifically
     # rather than assuming it's the only `term` clause present.
@@ -126,8 +127,8 @@ def test_exact_asin_field_and_boost_come_from_config():
 
 
 def test_fuzzy_switch_can_be_disabled():
-    with_fuzzy = app.build_search_query("kamera", apply_intent_reranking=False)
-    without_fuzzy = app.build_search_query(
+    with_fuzzy = search_service.build_search_query("kamera", apply_intent_reranking=False)
+    without_fuzzy = search_service.build_search_query(
         "kamera", enable_fuzzy=False, apply_intent_reranking=False
     )
     with_count = len(_innermost_query(with_fuzzy["query"])["bool"]["must"][0]["bool"]["should"])
@@ -143,32 +144,32 @@ def test_fuzzy_multi_match_uses_configured_and_operator():
     # sorgusunda Automotive/Arts&Crafts ürünlerinin çıkması). "and" operatörü
     # tüm sorgu kelimelerinin (fuzzy toleransıyla) aynı alanda geçmesini
     # zorunlu kılar.
-    payload = app.build_search_query("kamera", apply_intent_reranking=False)
+    payload = search_service.build_search_query("kamera", apply_intent_reranking=False)
     should = _innermost_query(payload["query"])["bool"]["must"][0]["bool"]["should"]
     fuzzy_clauses = [
         c["multi_match"] for c in should
-        if c.get("multi_match", {}).get("type") == app.CONFIG.search_methods.fuzzy.type
+        if c.get("multi_match", {}).get("type") == search_service.CONFIG.search_methods.fuzzy.type
         and "fuzziness" in c.get("multi_match", {})
     ]
     assert len(fuzzy_clauses) == 1
-    assert fuzzy_clauses[0]["operator"] == app.CONFIG.search_methods.fuzzy.operator == "and"
+    assert fuzzy_clauses[0]["operator"] == search_service.CONFIG.search_methods.fuzzy.operator == "and"
 
 
 def test_token_translation_multi_match_uses_and_operator():
     # Aynı sınıf hata: çeviri token multi_match'i de operatörsüzse "or"
     # olur ve tek bir çevrilmiş kelime tek başına kapıyı geçirebilir.
-    payload = app.build_search_query("kablosuz", apply_intent_reranking=False)
+    payload = search_service.build_search_query("kablosuz", apply_intent_reranking=False)
     should = _innermost_query(payload["query"])["bool"]["must"][0]["bool"]["should"]
     token_translation_clauses = [
         c["multi_match"] for c in should
         if c.get("multi_match", {}).get("query") == "wireless"
     ]
     assert len(token_translation_clauses) == 1
-    assert token_translation_clauses[0]["operator"] == app.CONFIG.field_relevance.operator == "and"
+    assert token_translation_clauses[0]["operator"] == search_service.CONFIG.field_relevance.operator == "and"
 
 
 def test_field_relevance_produces_one_match_clause_per_configured_field():
-    payload = app.build_search_query(
+    payload = search_service.build_search_query(
         "kamera",
         enable_phrase=False,
         enable_fuzzy=False,
@@ -178,23 +179,23 @@ def test_field_relevance_produces_one_match_clause_per_configured_field():
     should = _innermost_query(payload["query"])["bool"]["must"][0]["bool"]["should"]
     match_clauses = [c["match"] for c in should if "match" in c]
     matched_field_names = {name for clause in match_clauses for name in clause}
-    for entry in app.CONFIG.field_relevance.fields:
+    for entry in search_service.CONFIG.field_relevance.fields:
         assert entry.field in matched_field_names
     title_clause = next(c["title"] for c in match_clauses if "title" in c)
-    title_entry = next(e for e in app.CONFIG.field_relevance.fields if e.field == "title")
+    title_entry = next(e for e in search_service.CONFIG.field_relevance.fields if e.field == "title")
     assert title_clause["boost"] == title_entry.boost
-    assert title_clause["operator"] == app.CONFIG.field_relevance.operator
+    assert title_clause["operator"] == search_service.CONFIG.field_relevance.operator
 
 
 def test_field_relevance_adds_cross_fields_clause():
-    payload = app.build_search_query(
+    payload = search_service.build_search_query(
         "kamera", enable_phrase=False, enable_fuzzy=False, enable_exact_asin=False, apply_intent_reranking=False,
     )
     should = _innermost_query(payload["query"])["bool"]["must"][0]["bool"]["should"]
     cross_fields = [c["multi_match"] for c in should if c.get("multi_match", {}).get("type") == "cross_fields"]
     assert len(cross_fields) == 1
-    assert cross_fields[0]["operator"] == app.CONFIG.field_relevance.operator
-    assert cross_fields[0]["boost"] == app.CONFIG.field_relevance.cross_fields_boost
+    assert cross_fields[0]["operator"] == search_service.CONFIG.field_relevance.operator
+    assert cross_fields[0]["boost"] == search_service.CONFIG.field_relevance.cross_fields_boost
 
 
 def test_field_relevance_disabled_by_enable_multi_match_toggle():
@@ -216,20 +217,20 @@ def test_field_relevance_disabled_by_enable_multi_match_toggle():
     # override below), so it can't be suppressed per-call here; "gadget" has
     # no entry in either query_translations.json or synonyms.json.
     no_title_ranking_cfg = replace(
-        app.CONFIG, title_ranking=replace(app.CONFIG.title_ranking, enabled=False)
+        search_service.CONFIG, title_ranking=replace(search_service.CONFIG.title_ranking, enabled=False)
     )
-    with_it = app.build_search_query(
+    with_it = search_service.build_search_query(
         "gadget", enable_phrase=False, enable_fuzzy=False,
         apply_intent_reranking=False, config=no_title_ranking_cfg,
     )
-    without_it = app.build_search_query(
+    without_it = search_service.build_search_query(
         "gadget", enable_phrase=False, enable_multi_match=False, enable_fuzzy=False,
         apply_intent_reranking=False, config=no_title_ranking_cfg,
     )
     with_count = len(_innermost_query(with_it["query"])["bool"]["must"][0]["bool"]["should"])
     without_count = len(_innermost_query(without_it["query"])["bool"]["must"][0]["bool"]["should"])
     assert without_count == 1  # exact_asin only
-    assert with_count == without_count + len(app.CONFIG.field_relevance.fields) + 1
+    assert with_count == without_count + len(search_service.CONFIG.field_relevance.fields) + 1
 
 
 def test_token_translation_only_query_does_not_crash_and_uses_field_relevance_fields():
@@ -242,11 +243,11 @@ def test_token_translation_only_query_does_not_crash_and_uses_field_relevance_fi
     `CONFIG.field_relevance.es_fields` instead, but had no covering test —
     this locks that fix in so a future refactor of `field_relevance.es_fields`
     can't silently reintroduce the crash with the suite still green."""
-    expansion = app.expand_multilingual_query("kablosuz")
+    expansion = search_service.expand_multilingual_query("kablosuz")
     assert expansion["phrase_translations"] == []
     assert expansion["token_translations"] == ["wireless"]
 
-    payload = app.build_search_query("kablosuz", apply_intent_reranking=False)
+    payload = search_service.build_search_query("kablosuz", apply_intent_reranking=False)
 
     should = _innermost_query(payload["query"])["bool"]["must"][0]["bool"]["should"]
     token_translation_clauses = [
@@ -254,7 +255,7 @@ def test_token_translation_only_query_does_not_crash_and_uses_field_relevance_fi
         if c.get("multi_match", {}).get("query") == "wireless"
     ]
     assert len(token_translation_clauses) == 1
-    assert token_translation_clauses[0]["fields"] == app.CONFIG.field_relevance.es_fields
+    assert token_translation_clauses[0]["fields"] == search_service.CONFIG.field_relevance.es_fields
 
 
 def test_capital_turkish_i_normalizes_before_dictionary_lookup():
@@ -265,7 +266,7 @@ def test_capital_turkish_i_normalizes_before_dictionary_lookup():
     # _normalize_query_text. This would have silently broken translation
     # lookup for ANY capitalized Turkish query starting with İ/I, not just
     # this one phrase.
-    expansion = app.expand_multilingual_query("İngiliz Anahtarı")
+    expansion = search_service.expand_multilingual_query("İngiliz Anahtarı")
     assert expansion["phrase_translations"] == ["wrench"]
 
 
@@ -274,7 +275,7 @@ def test_english_synonym_expansion_preserves_brand_name():
     # ("trainers"e genişler), "nike" sözlükte/eş anlamlı listesinde
     # olmadığı için OLDUĞU GİBİ korunmalı (bkz. "adidas ayakkabı"
     # regresyonuyla aynı sınıf gereksinim).
-    expansion = app.expand_multilingual_query("nike sneakers")
+    expansion = search_service.expand_multilingual_query("nike sneakers")
     assert expansion["token_translation_query"] == "nike trainers"
     assert "trainers" in expansion["token_translations"]
 
@@ -283,12 +284,12 @@ def test_turkish_synonym_redirect_reaches_existing_translation_entry():
     # "pabuç" query_translations.json'da bir anahtar DEĞİL -- yalnızca
     # synonyms.json'daki tr_redirects üzerinden zaten var olan "ayakkabı"
     # çevirisine yönlenmeli, YENİ bir çeviri seti gerektirmemeli.
-    expansion = app.expand_multilingual_query("pabuç")
+    expansion = search_service.expand_multilingual_query("pabuç")
     assert expansion["token_translation_query"] == "shoe"
 
 
 def test_synonym_expansion_produces_lexical_multi_match_clause():
-    payload = app.build_search_query("sneakers", apply_intent_reranking=False)
+    payload = search_service.build_search_query("sneakers", apply_intent_reranking=False)
     should = _innermost_query(payload["query"])["bool"]["must"][0]["bool"]["should"]
     synonym_clauses = [
         c["multi_match"] for c in should
@@ -303,7 +304,7 @@ def test_irregular_plural_synonym_expansion_works_without_reindex():
     # stemming olmadan eşleşmez (bkz. İngilizce stemming/reindex tartışması);
     # bu tip çiftler reindex gerektirmeden synonyms.json'a eklenerek
     # query-time'da kapatılabiliyor.
-    expansion = app.expand_multilingual_query("kitchen knife")
+    expansion = search_service.expand_multilingual_query("kitchen knife")
     assert expansion["token_translation_query"] == "kitchen knives"
 
 
@@ -311,7 +312,7 @@ def test_new_tr_redirect_reaches_existing_color_translation():
     # "bordo" (bordeaux/maroon) query_translations.json'da bir anahtar
     # DEĞİL -- synonyms.json'daki tr_redirects üzerinden zaten var olan
     # "kırmızı" -> "red" çevirisine yönlenmeli.
-    expansion = app.expand_multilingual_query("bordo çanta")
+    expansion = search_service.expand_multilingual_query("bordo çanta")
     assert expansion["token_translation_query"] == "red bag"
 
 
@@ -319,27 +320,27 @@ def test_new_en_synonym_pairs_expand_correctly():
     # Veri odaklı genişletme (bkz. config/synonyms.json) -- kataloğun gerçek
     # kategori/marka dağılımına göre bulunmuş, ABD/İngiltere terim farkları
     # ve yaygın alternatif yazımlar dahil.
-    assert "sunblock" in app.expand_multilingual_query("sunscreen")["token_translations"]
-    assert "moustache" in app.expand_multilingual_query("mustache")["token_translations"]
-    assert "dummy" in app.expand_multilingual_query("pacifier")["token_translations"]
-    assert "silencer" in app.expand_multilingual_query("muffler")["token_translations"]
-    assert "hood" in app.expand_multilingual_query("bonnet")["token_translations"]
-    assert "sticker" in app.expand_multilingual_query("decal")["token_translations"]
-    assert app.expand_multilingual_query("scifi")["token_translation_query"] == "science fiction"
+    assert "sunblock" in search_service.expand_multilingual_query("sunscreen")["token_translations"]
+    assert "moustache" in search_service.expand_multilingual_query("mustache")["token_translations"]
+    assert "dummy" in search_service.expand_multilingual_query("pacifier")["token_translations"]
+    assert "silencer" in search_service.expand_multilingual_query("muffler")["token_translations"]
+    assert "hood" in search_service.expand_multilingual_query("bonnet")["token_translations"]
+    assert "sticker" in search_service.expand_multilingual_query("decal")["token_translations"]
+    assert search_service.expand_multilingual_query("scifi")["token_translation_query"] == "science fiction"
 
 
 def test_field_relevance_canonical_field_matches_share_one_canonical_key():
     from services.search_service import _build_field_evidence_clauses
 
-    grouped = _build_field_evidence_clauses("kamera", app.CONFIG)
+    grouped = _build_field_evidence_clauses("kamera", search_service.CONFIG)
     assert "title" in grouped
     assert "title.tr" not in grouped
     assert len(grouped["title"]) == 2  # one clause for `title`, one for `title.tr`
 
 
 def test_field_relevance_debug_names_present_only_when_requested():
-    without_debug = app.build_search_query("kamera", apply_intent_reranking=False)
-    with_debug = app.build_search_query("kamera", apply_intent_reranking=False, include_relevance_debug=True)
+    without_debug = search_service.build_search_query("kamera", apply_intent_reranking=False)
+    with_debug = search_service.build_search_query("kamera", apply_intent_reranking=False, include_relevance_debug=True)
 
     def _has_any_name(payload):
         should = _innermost_query(payload["query"])["bool"]["must"][0]["bool"]["should"]
@@ -350,16 +351,16 @@ def test_field_relevance_debug_names_present_only_when_requested():
 
 
 def test_autocomplete_uses_configured_field_and_operator():
-    payload = app.build_autocomplete_query("kam", apply_intent_reranking=False)
+    payload = autocomplete_service.build_autocomplete_query("kam", apply_intent_reranking=False)
     inner = payload["query"]["bool"]["must"][0]["bool"]["should"][0]["match"]
-    field = app.CONFIG.search_methods.autocomplete.field
+    field = search_service.CONFIG.search_methods.autocomplete.field
     assert field in inner
-    assert inner[field]["operator"] == app.CONFIG.search_methods.autocomplete.operator
+    assert inner[field]["operator"] == search_service.CONFIG.search_methods.autocomplete.operator
 
 
 def test_autocomplete_result_size_defaults_from_config():
-    payload = app.build_autocomplete_query("kam")
-    assert payload["size"] == app.CONFIG.limits.autocomplete_fetch_size
+    payload = autocomplete_service.build_autocomplete_query("kam")
+    assert payload["size"] == search_service.CONFIG.limits.autocomplete_fetch_size
 
 
 def test_autocomplete_should_includes_manual_positive_categories_from_new_schema():
@@ -370,7 +371,7 @@ def test_autocomplete_should_includes_manual_positive_categories_from_new_schema
     üzerinden geçtiği için kasıtlı ve kilitlenmesi gereken bir davranıştır
     (bkz. Task 4/5 review fix: önceden hem normal aramada hem autocomplete'te
     ölü/kullanılmayan bir alandı)."""
-    payload = app.build_autocomplete_query("iphone case")
+    payload = autocomplete_service.build_autocomplete_query("iphone case")
     should = payload["query"]["bool"]["should"]
 
     cases_clauses = [
@@ -390,13 +391,13 @@ def test_autocomplete_should_includes_manual_positive_categories_from_new_schema
 
 
 def test_detect_search_intent_watch():
-    info = app.detect_search_intent("erkek kol saati")
+    info = search_service.detect_search_intent("erkek kol saati")
     assert info["intent"] == "watch"
     assert info["apply_exclusion"] is True
 
 
 def test_detect_search_intent_none_for_unrelated_query():
-    info = app.detect_search_intent("wireless headphones")
+    info = search_service.detect_search_intent("wireless headphones")
     assert info["intent"] is None
 
 
@@ -417,9 +418,9 @@ def test_category_signal_alone_cannot_produce_a_hit():
     # they must be disabled too in order to prove category signals alone
     # (with genuinely zero lexical methods) cannot produce a hit.
     no_title_ranking_cfg = replace(
-        app.CONFIG, title_ranking=replace(app.CONFIG.title_ranking, enabled=False)
+        search_service.CONFIG, title_ranking=replace(search_service.CONFIG.title_ranking, enabled=False)
     )
-    payload = app.build_search_query(
+    payload = search_service.build_search_query(
         "wireless mouse",
         enable_phrase=False, enable_multi_match=False, enable_fuzzy=False, enable_exact_asin=False,
         config=no_title_ranking_cfg,
@@ -532,22 +533,22 @@ def test_dynamic_positive_store_candidate_renders_term_on_store_field():
 
 
 def test_title_ranking_adds_exact_and_prefix_tiers():
-    payload = app.build_search_query("wireless mouse")
+    payload = search_service.build_search_query("wireless mouse")
     should = _innermost_query(payload["query"])["bool"]["must"][0]["bool"]["should"]
-    exact_field = app.CONFIG.title_ranking.exact_field
-    assert any(c.get("term", {}).get(exact_field, {}).get("boost") == app.CONFIG.title_ranking.exact_boost for c in should)
+    exact_field = search_service.CONFIG.title_ranking.exact_field
+    assert any(c.get("term", {}).get(exact_field, {}).get("boost") == search_service.CONFIG.title_ranking.exact_boost for c in should)
     assert any(
-        c.get("match_phrase_prefix", {}).get("title", {}).get("boost") == app.CONFIG.title_ranking.prefix_boost
+        c.get("match_phrase_prefix", {}).get("title", {}).get("boost") == search_service.CONFIG.title_ranking.prefix_boost
         for c in should
     )
     prefix_clause = next(c for c in should if "match_phrase_prefix" in c)
-    assert prefix_clause["match_phrase_prefix"]["title"]["max_expansions"] == app.CONFIG.title_ranking.prefix_max_expansions
+    assert prefix_clause["match_phrase_prefix"]["title"]["max_expansions"] == search_service.CONFIG.title_ranking.prefix_max_expansions
 
 
 def test_title_ranking_tiers_present_even_when_phrase_search_disabled():
-    payload = app.build_search_query("wireless mouse", enable_phrase=False)
+    payload = search_service.build_search_query("wireless mouse", enable_phrase=False)
     should = _innermost_query(payload["query"])["bool"]["must"][0]["bool"]["should"]
-    exact_field = app.CONFIG.title_ranking.exact_field
+    exact_field = search_service.CONFIG.title_ranking.exact_field
     assert any(exact_field in c.get("term", {}) for c in should)
     assert any("match_phrase_prefix" in c for c in should)
     assert not any("match_phrase" in c and c.get("match_phrase", {}).get("title") for c in should)
@@ -593,7 +594,7 @@ def _find_function_score_by_name_prefix(query_node, name_prefix):
 
 
 def test_field_consensus_wraps_query_in_function_score():
-    payload = app.build_search_query("kamera", include_relevance_debug=True)
+    payload = search_service.build_search_query("kamera", include_relevance_debug=True)
     fs = _find_function_score_by_name_prefix(payload["query"], "consensus:")
     assert fs is not None
     assert fs["score_mode"] == "max"
@@ -602,7 +603,7 @@ def test_field_consensus_wraps_query_in_function_score():
 
 
 def test_field_consensus_filters_never_use_exists():
-    payload = app.build_search_query("kamera", include_relevance_debug=True)
+    payload = search_service.build_search_query("kamera", include_relevance_debug=True)
     raw = json.dumps(payload)
     fs = _find_function_score_by_name_prefix(payload["query"], "consensus:")
     assert "exists" not in json.dumps(fs)
@@ -612,12 +613,12 @@ def test_field_consensus_tier_weights_come_from_config():
     """Asserts the actual (minimum_should_match, weight) PAIRING, not just the
     set of weight values — a set-membership check would still pass if
     two_field_boost and four_plus_field_boost were accidentally swapped."""
-    payload = app.build_search_query("kamera", include_relevance_debug=True)
+    payload = search_service.build_search_query("kamera", include_relevance_debug=True)
     fs = _find_function_score_by_name_prefix(payload["query"], "consensus:")
     pairs = sorted(
         (fn["filter"]["bool"]["minimum_should_match"], fn["weight"]) for fn in fs["functions"]
     )
-    fc = app.CONFIG.field_consensus
+    fc = search_service.CONFIG.field_consensus
     assert pairs == [
         (2, fc.two_field_boost),
         (3, fc.three_field_boost),
@@ -647,7 +648,7 @@ def test_field_consensus_no_evidence_grants_no_unearned_bonus():
     (regardless of any real match) would earn the top consensus bonus. The wrapper
     must be skipped entirely in this case: no "consensus:" name should appear
     anywhere in the built payload."""
-    payload = app.build_search_query(
+    payload = search_service.build_search_query(
         "kamera", enable_multi_match=False, include_relevance_debug=True
     )
     raw = json.dumps(payload)
@@ -655,7 +656,7 @@ def test_field_consensus_no_evidence_grants_no_unearned_bonus():
 
 
 def test_relevance_contradiction_wraps_query_when_rule_matches():
-    payload = app.build_search_query("men perfume", include_relevance_debug=True)
+    payload = search_service.build_search_query("men perfume", include_relevance_debug=True)
     fs = _find_function_score_by_name_prefix(payload["query"], "contradiction")
     assert fs is not None
     # contradiction filters don't carry a top-level "consensus:"/"contradiction:" bool _name
@@ -667,14 +668,14 @@ def test_relevance_contradiction_wraps_query_when_rule_matches():
 
 
 def test_relevance_contradiction_filters_never_use_exists():
-    payload = app.build_search_query("men perfume", include_relevance_debug=True)
+    payload = search_service.build_search_query("men perfume", include_relevance_debug=True)
     fs = _find_function_score_by_name_prefix(payload["query"], "contradiction")
     assert fs is not None
     assert "exists" not in json.dumps(fs)
 
 
 def test_relevance_contradiction_never_produces_must_not():
-    payload = app.build_search_query("men perfume")
+    payload = search_service.build_search_query("men perfume")
     # payload["query"] is always a function_score wrapper (Task 3's field_consensus
     # wraps unconditionally when enabled) — peel back to the real bool node, same
     # as every other structural assertion in this file (see _innermost_query).
@@ -686,7 +687,7 @@ def test_relevance_contradiction_never_produces_must_not():
 
 
 def test_relevance_contradiction_absent_without_contradiction_terms():
-    payload = app.build_search_query("wireless mouse", include_relevance_debug=True)
+    payload = search_service.build_search_query("wireless mouse", include_relevance_debug=True)
     raw = json.dumps(payload)
     assert "contradiction:" not in raw
 
@@ -697,7 +698,7 @@ def test_relevance_contradiction_score_mode_is_min_not_max():
     only holds because quality_ranking.enabled=false in the current repo config;
     if quality_ranking were ever enabled, an outermost-node assumption would break
     with a confusing KeyError instead of a clear assertion failure."""
-    payload = app.build_search_query("men perfume", include_relevance_debug=True)
+    payload = search_service.build_search_query("men perfume", include_relevance_debug=True)
     fs = _find_function_score_by_name_prefix(payload["query"], "contradiction_tier:")
     assert fs is not None
     assert fs["score_mode"] == "min"
@@ -705,24 +706,24 @@ def test_relevance_contradiction_score_mode_is_min_not_max():
 
 
 def test_relevance_contradiction_tiers_are_named_for_debug():
-    payload = app.build_search_query("men perfume", include_relevance_debug=True)
+    payload = search_service.build_search_query("men perfume", include_relevance_debug=True)
     raw = json.dumps(payload)
     assert "contradiction_tier:mild" in raw
     assert "contradiction_tier:strong" in raw
 
 
 def test_relevance_contradiction_tier_names_absent_without_debug():
-    payload = app.build_search_query("men perfume")
+    payload = search_service.build_search_query("men perfume")
     raw = json.dumps(payload)
     assert "contradiction_tier:" not in raw
 
 
 def test_store_boost_clause_present_in_outer_should():
-    payload = app.build_search_query("sony")
+    payload = search_service.build_search_query("sony")
     should = _innermost_query(payload["query"])["bool"].get("should", [])
     store_clauses = [c for c in should if "match" in c and "store" in c["match"]]
     assert len(store_clauses) == 1
-    assert store_clauses[0]["match"]["store"]["boost"] == app.CONFIG.field_relevance.store_boost
+    assert store_clauses[0]["match"]["store"]["boost"] == search_service.CONFIG.field_relevance.store_boost
 
 
 def test_store_boost_zero_omits_clause(tmp_path_factory):
@@ -745,7 +746,7 @@ def test_store_boost_clause_omitted_when_multi_match_disabled():
     every other field_relevance-derived clause (per-field evidence, cross_fields
     fallback) already is — turning off "Cok alanli arama" should also turn off
     the store-boost helper clause, for consistency (final review bulgusu 6)."""
-    payload = app.build_search_query("sony", enable_multi_match=False)
+    payload = search_service.build_search_query("sony", enable_multi_match=False)
     should = _innermost_query(payload["query"])["bool"].get("should", [])
     assert not any("store" in c.get("match", {}) for c in should)
 
@@ -756,7 +757,7 @@ def test_store_boost_clause_lives_only_in_outer_should_not_in_function_score_fil
     men_perfume rule with contradiction_terms, ensuring both wrapper types are
     present. Uses structure-aware assertion (checking field keys) rather than
     substring matching to avoid false positives from query text in field evidence."""
-    payload = app.build_search_query("men perfume", include_relevance_debug=True)
+    payload = search_service.build_search_query("men perfume", include_relevance_debug=True)
 
     def _collect_function_score_filters(node, acc):
         if isinstance(node, dict):
@@ -808,7 +809,7 @@ def test_compute_relevance_explain_counts_fields():
             "categories_text": "",
         }
     }
-    result = compute_relevance_explain(hit, "wireless mouse", app.CONFIG)
+    result = compute_relevance_explain(hit, "wireless mouse", search_service.CONFIG)
     assert set(result["matched_fields"]) == {"title", "features"}
     assert result["consensus_level"] == 2
     assert result["contradictions"] == []
@@ -829,9 +830,9 @@ def test_compute_relevance_explain_mild_tier_penalty():
             "main_category": "Fragrance",
         }
     }
-    result = compute_relevance_explain(hit, "men perfume", app.CONFIG)
+    result = compute_relevance_explain(hit, "men perfume", search_service.CONFIG)
     assert set(result["contradictions"]) == {"description", "features"}
-    assert result["applied_penalty"] == app.CONFIG.relevance_contradiction.mild_penalty
+    assert result["applied_penalty"] == search_service.CONFIG.relevance_contradiction.mild_penalty
 
 
 def test_compute_relevance_explain_strong_tier_overrides_mild():
@@ -849,9 +850,9 @@ def test_compute_relevance_explain_strong_tier_overrides_mild():
             "categories": ["Sunscreen and skincare"],
         }
     }
-    result = compute_relevance_explain(hit, "men perfume", app.CONFIG)
+    result = compute_relevance_explain(hit, "men perfume", search_service.CONFIG)
     assert len(result["contradictions"]) >= 3
-    assert result["applied_penalty"] == app.CONFIG.relevance_contradiction.strong_penalty
+    assert result["applied_penalty"] == search_service.CONFIG.relevance_contradiction.strong_penalty
 
 
 def test_compute_relevance_explain_no_match():
@@ -865,7 +866,7 @@ def test_compute_relevance_explain_no_match():
             "categories_text": "",
         }
     }
-    result = compute_relevance_explain(hit, "wireless mouse", app.CONFIG)
+    result = compute_relevance_explain(hit, "wireless mouse", search_service.CONFIG)
     assert result == {
         "matched_fields": [],
         "consensus_level": 0,
@@ -894,7 +895,7 @@ def test_compute_relevance_explain_reports_translation_match_when_only_translati
             "categories_text": "",
         }
     }
-    result = compute_relevance_explain(hit, "güneş kremi", app.CONFIG)
+    result = compute_relevance_explain(hit, "güneş kremi", search_service.CONFIG)
     assert result["matched_fields"] == ["title"]
     assert result["translation_matched"] is True
 
@@ -905,7 +906,7 @@ def test_translation_phrase_clause_is_named_with_real_field_when_debug_enabled()
     # "translation:*" değil -- böylece matched_fields/consensus_level doğru
     # şekilde dolar. `_name`, match_phrase'in alan-değeri objesinin İÇİNDE
     # yaşar (bkz. _build_field_evidence_clauses aynı desen).
-    payload = app.build_search_query("güneş kremi", apply_intent_reranking=False, include_relevance_debug=True)
+    payload = search_service.build_search_query("güneş kremi", apply_intent_reranking=False, include_relevance_debug=True)
     should = _innermost_query(payload["query"])["bool"]["must"][0]["bool"]["should"]
     phrase_translation_clauses = [
         c["match_phrase"]["title"] for c in should
@@ -919,7 +920,7 @@ def test_translation_token_clause_is_named_generically_not_as_a_field():
     # Kelime bazlı çeviri multi_match'i (best_fields) birden fazla alanı
     # birden taradığı için "field:title" gibi belirli bir alanmış gibi
     # etiketlenMEmeli -- ayrı, dürüst bir "translation:token" adı taşır.
-    payload = app.build_search_query("kablosuz", apply_intent_reranking=False, include_relevance_debug=True)
+    payload = search_service.build_search_query("kablosuz", apply_intent_reranking=False, include_relevance_debug=True)
     should = _innermost_query(payload["query"])["bool"]["must"][0]["bool"]["should"]
     token_translation_clauses = [
         c["multi_match"] for c in should if c.get("multi_match", {}).get("query") == "wireless"
@@ -931,7 +932,7 @@ def test_translation_token_clause_is_named_generically_not_as_a_field():
 def test_translation_clauses_unnamed_when_debug_disabled():
     # include_relevance_debug=False (varsayılan) iken çeviri maddelerine
     # hiç `_name` eklenmemeli -- gereksiz payload büyümesi/karmaşıklık.
-    payload = app.build_search_query("güneş kremi", apply_intent_reranking=False)
+    payload = search_service.build_search_query("güneş kremi", apply_intent_reranking=False)
     should = _innermost_query(payload["query"])["bool"]["must"][0]["bool"]["should"]
     phrase_clauses = [c["match_phrase"]["title"] for c in should if "match_phrase" in c]
     assert phrase_clauses, "çeviri fraz maddesi bulunamadı"
@@ -939,17 +940,17 @@ def test_translation_clauses_unnamed_when_debug_disabled():
 
 
 def test_sort_relevance_default_omits_sort_key():
-    payload = app.build_search_query("kamera")
+    payload = search_service.build_search_query("kamera")
     assert "sort" not in payload
 
 
 def test_sort_price_asc_orders_by_price_with_missing_last_and_score_tiebreak():
-    payload = app.build_search_query("kamera", sort="price-asc")
+    payload = search_service.build_search_query("kamera", sort="price-asc")
     assert payload["sort"] == [{"price": {"order": "asc", "missing": "_last"}}, "_score"]
 
 
 def test_sort_price_desc_orders_by_price_descending():
-    payload = app.build_search_query("kamera", sort="price-desc")
+    payload = search_service.build_search_query("kamera", sort="price-desc")
     assert payload["sort"] == [{"price": {"order": "desc", "missing": "_last"}}, "_score"]
 
 
@@ -959,13 +960,13 @@ def test_sort_rating_uses_bayesian_weighted_script_not_raw_average():
     # koyardı -- bu istenmeyen davranış (bkz. RatingSortConfig docstring'i).
     # Bunun yerine (v/(v+m))*R + (m/(v+m))*C Bayesian formülünü uygulayan
     # bir _script sort kullanılır.
-    payload = app.build_search_query("kamera", sort="rating")
+    payload = search_service.build_search_query("kamera", sort="rating")
     sort_clause = payload["sort"]
     assert sort_clause[0]["_script"]["type"] == "number"
     assert sort_clause[0]["_script"]["order"] == "desc"
     params = sort_clause[0]["_script"]["script"]["params"]
-    assert params["m"] == app.CONFIG.rating_sort.minimum_votes
-    assert params["prior"] == app.CONFIG.rating_sort.prior_rating
+    assert params["m"] == search_service.CONFIG.rating_sort.minimum_votes
+    assert params["prior"] == search_service.CONFIG.rating_sort.prior_rating
     assert sort_clause[1] == "_score"
 
 
@@ -974,8 +975,8 @@ def test_rating_sort_formula_favors_high_vote_count_over_lone_perfect_rating():
     # 3 değerlendirme + 5.0 puandan daha yüksek sıralanmalı.
     import math
 
-    m = app.CONFIG.rating_sort.minimum_votes
-    c = app.CONFIG.rating_sort.prior_rating
+    m = search_service.CONFIG.rating_sort.minimum_votes
+    c = search_service.CONFIG.rating_sort.prior_rating
 
     def weighted(v, r):
         return (v / (v + m)) * r + (m / (v + m)) * c
@@ -984,8 +985,8 @@ def test_rating_sort_formula_favors_high_vote_count_over_lone_perfect_rating():
 
 
 def test_rating_sort_formula_pulls_low_vote_products_toward_prior():
-    m = app.CONFIG.rating_sort.minimum_votes
-    c = app.CONFIG.rating_sort.prior_rating
+    m = search_service.CONFIG.rating_sort.minimum_votes
+    c = search_service.CONFIG.rating_sort.prior_rating
 
     def weighted(v, r):
         return (v / (v + m)) * r + (m / (v + m)) * c
@@ -1000,7 +1001,7 @@ def test_sort_unknown_value_falls_back_to_relevance():
     # build_search_query saf bir fonksiyon olarak fail-safe davranır --
     # geçersiz değerlerin reddi API katmanının işidir (bkz. api/main.py:
     # search_service.SORT_MODES doğrulaması).
-    payload = app.build_search_query("kamera", sort="bogus")
+    payload = search_service.build_search_query("kamera", sort="bogus")
     assert "sort" not in payload
 
 
@@ -1014,12 +1015,12 @@ def test_sort_modes_exposes_relevance_and_all_sort_clauses():
 
 
 def test_min_score_omitted_by_default():
-    payload = app.build_search_query("kamera")
+    payload = search_service.build_search_query("kamera")
     assert "min_score" not in payload
 
 
 def test_min_score_included_when_provided():
-    payload = app.build_search_query("kamera", min_score=42.5)
+    payload = search_service.build_search_query("kamera", min_score=42.5)
     assert payload["min_score"] == 42.5
 
 
@@ -1062,18 +1063,18 @@ def test_extract_unit_signals_deduplicates_and_caps_signal_count():
 
 
 def test_unit_match_produces_should_clause_with_configured_boost():
-    payload = app.build_search_query("32 inch monitor", apply_intent_reranking=False)
+    payload = search_service.build_search_query("32 inch monitor", apply_intent_reranking=False)
     should = _innermost_query(payload["query"])["bool"]["should"]
     unit_clauses = [c for c in should if any(
         f.get("match_phrase", {}).get("title", {}).get("query") == "32 inch"
         for f in c.get("bool", {}).get("should", [])
     )]
     assert len(unit_clauses) == 1
-    assert unit_clauses[0]["bool"]["boost"] == app.CONFIG.unit_matching.boost
+    assert unit_clauses[0]["bool"]["boost"] == search_service.CONFIG.unit_matching.boost
 
 
 def test_unit_match_covers_all_configured_fields():
-    payload = app.build_search_query(
+    payload = search_service.build_search_query(
         "500ml bottle", apply_intent_reranking=False, include_relevance_debug=True
     )
     should = _innermost_query(payload["query"])["bool"]["should"]
@@ -1082,19 +1083,19 @@ def test_unit_match_covers_all_configured_fields():
         for c in should
         if str(c.get("bool", {}).get("_name", "")).startswith("unit:")
     }
-    assert unit_fields == set(app.CONFIG.unit_matching.fields)
+    assert unit_fields == set(search_service.CONFIG.unit_matching.fields)
 
 
 def test_unit_match_does_not_gate_lexical_search():
     # Ölçü sinyali bool.should'ta (rerank-only) kalmalı, bool.must'taki
     # zorunlu lexical kapıyı hiç etkilememeli (CLAUDE.md §9).
-    payload = app.build_search_query("32 inch monitor", apply_intent_reranking=False)
+    payload = search_service.build_search_query("32 inch monitor", apply_intent_reranking=False)
     must = _innermost_query(payload["query"])["bool"]["must"]
     assert len(must) == 1  # tek zorunlu lexical grup, ölçü maddesi eklenmemiş
 
 
 def test_unit_match_absent_when_no_measurement_in_query():
-    payload = app.build_search_query(
+    payload = search_service.build_search_query(
         "wireless mouse", apply_intent_reranking=False, include_relevance_debug=True
     )
     should = _innermost_query(payload["query"])["bool"].get("should", [])
@@ -1120,8 +1121,8 @@ def test_unit_match_disabled_via_config(tmp_path_factory):
 
 
 def test_unit_match_debug_names_present_only_when_requested():
-    without_debug = app.build_search_query("32 inch monitor", apply_intent_reranking=False)
-    with_debug = app.build_search_query(
+    without_debug = search_service.build_search_query("32 inch monitor", apply_intent_reranking=False)
+    with_debug = search_service.build_search_query(
         "32 inch monitor", apply_intent_reranking=False, include_relevance_debug=True
     )
 
