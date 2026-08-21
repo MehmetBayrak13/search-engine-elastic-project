@@ -9,8 +9,9 @@ isim-kopyalama testlerin `monkeypatch.setattr(search_service, "X", ...)` ile
 yaptığı değişiklikleri bu modülden görünmez kılar (import zamanında alınan
 kopya, kaynak modül sonradan değişse bile eskisi gibi kalır).
 
-Bu modül de Streamlit'e bağımlı DEĞİLDİR; önbellekleme `app.py`'de yapılır
-(bkz. `search_service` docstring'i — aynı DI deseni burada da geçerlidir).
+Bu modül de herhangi bir UI framework'üne bağımlı DEĞİLDİR; önbellekleme
+`api/main.py`de yapılır (bkz. `search_service` docstring'i — aynı DI deseni
+burada da geçerlidir).
 """
 
 from __future__ import annotations
@@ -67,6 +68,24 @@ def build_autocomplete_query(
         }
     ]
 
+    # Edge NGram alanı bir prefiks/fragman alanıdır -- baştaki bir yazım
+    # hatası TÜM fragmanları bozar (bkz. AutocompleteQueryConfig docstring'i).
+    # Düz (ngram'sız) `title` üzerinde AYRI bir fuzzy `should` maddesi bu
+    # durumlar için bir yedek yol sağlar -- birincil `and` zorunluluğunu
+    # BOZMAZ, yalnızca ek bir alternatif ekler (`minimum_should_match: 1`
+    # zaten ikisinden birinin yeterli olmasına izin verir).
+    autocomplete_method = config.search_methods.autocomplete
+    if autocomplete_method.fuzzy_fallback_enabled:
+        lexical_queries.append({
+            "match": {
+                autocomplete_method.fuzzy_fallback_field: {
+                    "query": query_text,
+                    "fuzziness": "AUTO",
+                    "boost": autocomplete_method.fuzzy_fallback_boost,
+                }
+            }
+        })
+
     if config.translation.enabled and config.translation.autocomplete_enabled:
         expansion = search_service.expand_multilingual_query(query_text)
         for phrase in expansion["phrase_translations"]:
@@ -120,7 +139,7 @@ def build_autocomplete_query(
 def fetch_suggestion_hits(query_text: str, result_size: int):
     """
     Canlı önerileri Edge NGram autocomplete indexinden (AUTOCOMPLETE_INDEX_NAME)
-    getirir (ÖNBELLEKSİZ — Streamlit önbellekleme `app.py`'de yapılır, bkz.
+    getirir (ÖNBELLEKSİZ — önbellekleme `api/main.py`de yapılır, bkz.
     modül docstring'i). `get_suggestions`'ın varsayılan fetcher'ıdır.
 
     Cache güvenliği için yalnızca JSON-benzeri argümanlar/dönüşler kullanılır;
@@ -153,8 +172,8 @@ def get_suggestions(
     fazla `max_items` (varsayılan: config'teki autocomplete_display_size)
     öneri döndürülür. Öneriler lexical arama switchlerinden bağımsızdır.
 
-    `fetch_hits`: varsayılan `fetch_suggestion_hits` (önbelleksiz); `app.py`
-    burada kendi `st.cache_data` sarmalayıcısını enjekte eder.
+    `fetch_hits`: varsayılan `fetch_suggestion_hits` (önbelleksiz); `api/main.py`
+    burada kendi `api/cache.py: ttl_cache` sarmalayıcısını enjekte eder.
 
     Dönüş: (list[SuggestionItem], hata_mesaji|None)
     """

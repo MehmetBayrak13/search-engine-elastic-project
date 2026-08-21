@@ -39,7 +39,10 @@
     },
     "autocomplete": {
       "field": "title.autocomplete",
-      "operator": "and"
+      "operator": "and",
+      "fuzzy_fallback_enabled": true,
+      "fuzzy_fallback_field": "title",
+      "fuzzy_fallback_boost": 0.5
     }
   },
   "translation": {
@@ -99,6 +102,20 @@
     "fields": ["title", "features"],
     "boost": 2.5,
     "min_query_length": 3
+  },
+  "result_diversification": {
+    "enabled": true,
+    "significant_word_count": 5
+  },
+  "price_extraction": {
+    "enabled": true
+  },
+  "spell_suggest": {
+    "enabled": true,
+    "field": "title",
+    "max_hits_to_trigger": 3,
+    "min_score": 0.6,
+    "suggestion_size": 1
   },
   "rating_sort": {
     "minimum_votes": 50,
@@ -260,6 +277,7 @@
       "no_method_warning": "Normal arama için en az bir arama yöntemi açık olmalı.",
       "settings_changed_info": "Arama ayarları değişti. Sonuçları güncellemek için tekrar arayın.",
       "no_results_info": "Arama tamamlandı — \"{query}\" ile eşleşen bir ürün bulunamadı.",
+      "did_you_mean_cta": "\"{suggestion}\" mi demek istediniz?",
       "suggestions_unavailable_warning": "Canlı öneriler şu anda alınamadı.",
       "suggestions_min_chars_caption": "Öneriler için en az {min_chars} karakter yazın.",
       "score_disclaimer_caption": "Skor, Elasticsearch relevance değeridir; olasılık yüzdesi değildir.",

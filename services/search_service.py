@@ -3,14 +3,14 @@ Ana ürün araması servis katmanı: intent tespiti, Türkçe->İngilizce sorgu
 genişletme, dinamik kategori keşfi, kalite reranking ve Elasticsearch sorgu
 oluşturma/çalıştırma burada yaşar.
 
-Bu modül Streamlit'e bağımlı DEĞİLDİR: `import streamlit` yoktur,
-`session_state` kullanılmaz, önbellekleme (`st.cache_data`) burada değil
-çağıran UI katmanında (`app.py`) yapılır — bu yüzden aşağıdaki fetch
-fonksiyonları `fetch_aggregations`/benzeri bir DI (dependency injection)
-parametresi kabul eder: varsayılanı önbelleksiz gerçek Elasticsearch çağrısıdır,
-`app.py` kendi `st.cache_data` sarmalayıcısını enjekte ederek AYNI önbellekleme
-davranışını (TTL, cache key) korur. Testler ve ileride bir FastAPI endpoint'i
-bu modülü Streamlit'siz doğrudan çağırabilir.
+Bu modül herhangi bir UI framework'üne bağımlı DEĞİLDİR: session/state
+yönetimi yoktur, önbellekleme burada değil çağıran katmanda (`api/main.py`)
+yapılır — bu yüzden aşağıdaki fetch fonksiyonları `fetch_aggregations`/
+benzeri bir DI (dependency injection) parametresi kabul eder: varsayılanı
+önbelleksiz gerçek Elasticsearch çağrısıdır, `api/main.py` kendi
+`api/cache.py: ttl_cache` sarmalayıcısını enjekte ederek üretimdeki
+önbellekleme davranışını (TTL, cache key) sağlar. Testler bu modülü
+doğrudan çağırabilir.
 
 `_post_search`, testlerin `monkeypatch.setattr(search_service, "_post_search", ...)`
 ile mock'layabilmesi için modül seviyesinde bir isim olarak kalır;
@@ -52,6 +52,8 @@ __all__ = [
     "detect_search_intent",
     "expand_multilingual_query",
     "extract_unit_signals",
+    "diversify_hits",
+    "extract_price_constraint",
     "build_category_discovery_query",
     "fetch_category_aggregations",
     "discover_category_intent",
@@ -63,9 +65,9 @@ __all__ = [
 ]
 
 # ---------------------------------------------------------------------------
-# Yapılandırma yükleme (app.py'deki UI-yükleme akışından bağımsız kendi kopyası
-# — config.load_search_config @lru_cache'li olduğundan aynı AppConfig nesnesini
-# döner, iki modül arasında veri sapması olmaz).
+# Yapılandırma yükleme (çağıran katmandan bağımsız kendi kopyası —
+# config.load_search_config @lru_cache'li olduğundan aynı AppConfig nesnesini
+# döner, modüller arasında veri sapması olmaz).
 # ---------------------------------------------------------------------------
 ES_URL = os.getenv("ELASTICSEARCH_URL")
 ES_API_KEY = os.getenv("ELASTICSEARCH_API_KEY")
@@ -357,7 +359,7 @@ def build_category_discovery_query(
     `CONFIG`). Yalnızca `tools/evaluate_intent_ranking.py` gibi offline
     değerlendirme araçlarının, global state'i değiştirmeden aynı süreçte
     birden fazla config varyantını karşılaştırabilmesi için vardır; normal
-    çağrı yollarında (app.py, api) her zaman atlanır.
+    (`api/`) çağrı yollarında her zaman atlanır.
     """
     cfg = config or CONFIG
     dyn = cfg.dynamic_intent
@@ -431,10 +433,10 @@ def fetch_category_aggregations(
 ):
     """
     Kategori keşif aggregation'ını Elasticsearch'ten getirir (ÖNBELLEKSİZ —
-    Streamlit önbelleklemesi burada değil `app.py`'de yapılır, bkz. modül
+    önbellekleme burada değil çağıran katmanda yapılır, bkz. modül
     docstring'i). `discover_category_intent`'in varsayılan fetcher'ıdır;
-    çağıran taraf (app.py) kendi `st.cache_data` sarmalayıcısını enjekte
-    edebilir.
+    çağıran taraf (`api/main.py`) kendi `api/cache.py: ttl_cache`
+    sarmalayıcısını enjekte edebilir.
 
     `config`: opsiyonel `AppConfig` override'ı (bkz. `build_category_discovery_query`).
 
@@ -465,7 +467,7 @@ def discover_category_intent(
     devre dışı) sessizce boş liste döner — normal aramayı ASLA engellemez.
 
     `fetch_aggregations`: varsayılan `fetch_category_aggregations` (önbelleksiz);
-    `app.py` burada kendi `st.cache_data` sarmalayıcısını geçirir.
+    `api/main.py` burada kendi `api/cache.py: ttl_cache` sarmalayıcısını geçirir.
     `config`: opsiyonel `AppConfig` override'ı (bkz. `build_category_discovery_query`);
     varsayılan fetcher'a da aktarılır.
 
@@ -1143,6 +1145,138 @@ def _apply_accessory_penalty(base_query: dict, query_text: str, cfg: "AppConfig"
     }
 
 
+_PRICE_UNDER_PATTERNS = tuple(re.compile(p, re.IGNORECASE) for p in (
+    r"under\s*\$\s*(\d+(?:\.\d+)?)",
+    r"under\s*(\d+(?:\.\d+)?)\s*dollars?",
+    r"below\s*\$\s*(\d+(?:\.\d+)?)",
+    r"less than\s*\$\s*(\d+(?:\.\d+)?)",
+    r"\$\s*(\d+(?:\.\d+)?)\s*(?:or less|and under|and below)",
+    r"(\d+(?:[.,]\d+)?)\s*dolar(?:dan)?\s*(?:az|ucuz)",
+    r"(\d+(?:[.,]\d+)?)\s*dolar\s*alt[ıi](?:nda)?",
+    r"\$\s*(\d+(?:[.,]\d+)?)\s*alt[ıi](?:nda)?",
+))
+_PRICE_OVER_PATTERNS = tuple(re.compile(p, re.IGNORECASE) for p in (
+    r"over\s*\$\s*(\d+(?:\.\d+)?)",
+    r"over\s*(\d+(?:\.\d+)?)\s*dollars?",
+    r"above\s*\$\s*(\d+(?:\.\d+)?)",
+    r"more than\s*\$\s*(\d+(?:\.\d+)?)",
+    r"(\d+(?:[.,]\d+)?)\s*dolar(?:dan)?\s*fazla",
+    r"(\d+(?:[.,]\d+)?)\s*dolar\s*(?:üstü|üstünde|üzerinde)",
+    r"\$\s*(\d+(?:[.,]\d+)?)\s*(?:üstü|üstünde|üzerinde)",
+))
+
+
+def _find_price_match(query_text: str) -> tuple[re.Match | None, str | None]:
+    """Ortak eşleşme mantığı -- hem `extract_price_constraint` (kısıt
+    DEĞERİni okumak için) hem de `build_search_query`nin en başındaki
+    metin temizleme adımı (fiyat ifadesinin lexical eşleşmeye SIZMAMASI
+    için, bkz. orada bırakılan yorum) AYNI eşleşmeyi kullanır -- ikisi
+    ayrı ayrı regex denese, hangi alt dizinin bulunup temizlendiği ile
+    hangi değerin kısıt olarak okunduğu tutarsız olabilirdi."""
+    if not query_text:
+        return None, None
+    for pattern in _PRICE_UNDER_PATTERNS:
+        match = pattern.search(query_text)
+        if match:
+            return match, "max"
+    for pattern in _PRICE_OVER_PATTERNS:
+        match = pattern.search(query_text)
+        if match:
+            return match, "min"
+    return None, None
+
+
+def extract_price_constraint(query_text: str) -> dict | None:
+    """Sorguda AÇIK bir fiyat kısıtı ("under $50", "50 dolar altı") var mı
+    diye bakar. ES'e istek atmaz, saf ve test edilebilirdir. Yalnızca
+    para birimi sembolü/"dolar" kelimesi + karşılaştırma ifadesiyle
+    (altında/üstünde/az/fazla vb.) BİRLİKTE geçen, yüksek güvenli
+    kalıplarla tetiklenir -- `unit_matching`in alanı olan belirsiz çıplak
+    sayılarla ("32 inch" gibi) asla karışmaz. En fazla bir kısıt döner
+    (`max_price` ya da `min_price`); ikisi birden desteklenmez (basit
+    aralık ifadeleri kapsam dışı, bkz. PriceExtractionConfig)."""
+    match, direction = _find_price_match(query_text)
+    if not match:
+        return None
+    value = float(match.group(1).replace(",", "."))
+    return {"max_price": value} if direction == "max" else {"min_price": value}
+
+
+def _price_constraint_filter_clause(query_text: str, cfg: "AppConfig") -> dict | None:
+    """`extract_price_constraint`i tek bir `range` filter maddesine çevirir.
+    `bool.filter` içinde yaşar (score'a katkısı yoktur, yalnızca
+    içerir/dışlar) -- CLAUDE.md'nin genel must/should ayrımına BİLİNÇLİ
+    bir istisnadır, bkz. `PriceExtractionConfig` docstring'i."""
+    if not cfg.price_extraction.enabled:
+        return None
+    constraint = extract_price_constraint(query_text)
+    if not constraint:
+        return None
+    range_params: dict = {}
+    if "max_price" in constraint:
+        range_params["lte"] = constraint["max_price"]
+    if "min_price" in constraint:
+        range_params["gte"] = constraint["min_price"]
+    return {"range": {"price": range_params}}
+
+
+_SPELL_SUGGEST_NAME = "spell_suggestion"
+
+
+def _build_spell_suggest_block(query_text: str, cfg: "AppConfig") -> dict | None:
+    """Ana `_search` isteğine EKSTRA bir round-trip YAPMADAN, aynı payload'a
+    ES'in `term` suggester'ını ekler (bkz. SpellSuggestConfig docstring'i).
+    `term` suggester -- `phrase` suggester'ın aksine -- shingle'lı bir alan
+    GEREKTİRMEZ (bu projede `title` shingle'sız düz bir `text` alanı,
+    reindex bu görev kapsamında değil), kelime kelime çalışır; tam ifade
+    önerisi `_build_did_you_mean`de yeniden birleştirilir.
+    `suggest_mode: "missing"`: yalnızca alan sözlüğünde HİÇ olmayan
+    kelimeler için öneri üretir -- zaten geçerli (nadir de olsa var olan)
+    kelimeleri "düzeltmeye" çalışmaz."""
+    if not cfg.spell_suggest.enabled or not (query_text or "").strip():
+        return None
+    return {
+        _SPELL_SUGGEST_NAME: {
+            "text": query_text,
+            "term": {
+                "field": cfg.spell_suggest.field,
+                "size": cfg.spell_suggest.suggestion_size,
+                "suggest_mode": "missing",
+            },
+        }
+    }
+
+
+def _build_did_you_mean(query_text: str, suggest_response: dict, cfg: "AppConfig") -> str | None:
+    """`_search` yanıtındaki `suggest.spell_suggestion` girdilerini TEK bir
+    düzeltilmiş cümleye birleştirir. Yalnızca `min_score` üzerindeki
+    adaylar kabul edilir; hiçbir kelime değişmediyse (öneri gerçek bir
+    "düzeltme" içermiyorsa) `None` döner. Offset'ler SONDAN BAŞA doğru
+    uygulanır ki bir değişiklik, henüz işlenmemiş ÖNCEKİ bir girdinin
+    offset'ini kaydırmasın."""
+    entries = suggest_response.get(_SPELL_SUGGEST_NAME) or []
+    if not entries:
+        return None
+    corrected = query_text
+    changed = False
+    for entry in sorted(entries, key=lambda e: e.get("offset", 0), reverse=True):
+        options = entry.get("options") or []
+        if not options:
+            continue
+        top = options[0]
+        if top.get("score", 0) < cfg.spell_suggest.min_score:
+            continue
+        offset = entry.get("offset")
+        length = entry.get("length")
+        if offset is None or length is None:
+            continue
+        corrected = corrected[:offset] + top["text"] + corrected[offset + length:]
+        changed = True
+    if not changed or corrected.strip().casefold() == query_text.strip().casefold():
+        return None
+    return corrected
+
+
 def _book_title_gate_must_not(query_text: str, cfg: "AppConfig") -> dict | None:
     """`BookTitleGateConfig` docstring'indeki motivasyonun ES karşılığı:
     "kitap kategorisinde AMA başlığa (neredeyse) tam eşleşmeyen" belgeleri
@@ -1426,6 +1560,21 @@ def build_search_query(
         track_total_hits if track_total_hits is not None else cfg.elasticsearch.track_total_hits
     )
 
+    # Fiyat kısıtı ifadesi ("under $50") ASLA lexical eşleşmeye (title/features
+    # metnine) katılmamalı -- gerçek ürün başlıklarında "under"/"$50" gibi
+    # metinler geçmez, `field_relevance.operator: "and"` altında bu kelimeler
+    # TÜM eşleşmeleri bozardı (canlıda doğrulandı: "under $30 wireless mouse"
+    # neredeyse hiç sonuç döndürmüyordu). Filtre maddesi ORİJİNAL metinden
+    # (temizlemeden ÖNCE) hesaplanır ve aşağıda `bool.filter`e olduğu gibi
+    # eklenir; `query_text` bu noktadan itibaren ise TEMİZLENMİŞ hâliyle
+    # geri kalan tüm lexical/intent/çeviri mantığına akar.
+    price_filter = _price_constraint_filter_clause(query_text, cfg)
+    if price_filter is not None:
+        price_match, _ = _find_price_match(query_text)
+        query_text = " ".join(
+            (query_text[: price_match.start()] + query_text[price_match.end():]).split()
+        )
+
     normalized_page = _normalize_page(page)
     if pagination.enabled:
         size = page_size if page_size is not None else pagination.page_size
@@ -1582,6 +1731,8 @@ def build_search_query(
         must_not_clauses.append(book_gate_clause)
     if must_not_clauses:
         bool_query["must_not"] = must_not_clauses
+    if price_filter is not None:
+        bool_query["filter"] = [price_filter]
 
     base_query = {"bool": bool_query}
 
@@ -1634,6 +1785,9 @@ def build_search_query(
         # (tek alanda geçen bir değinme) fiyat/puan sıralamasında rahatlıkla
         # 1. sıraya çıkabilir; bu taban değeri onları tamamen eler.
         payload["min_score"] = min_score
+    suggest_block = _build_spell_suggest_block(query_text, cfg)
+    if suggest_block is not None:
+        payload["suggest"] = suggest_block
     return payload
 
 
@@ -1745,6 +1899,49 @@ def _probe_max_relevance_score(
     return float(max_score) if max_score is not None else None
 
 
+_FAMILY_KEY_STOPWORDS = frozenset({"for", "with", "and", "the", "a", "an", "of", "to", "in", "on", "by"})
+_FAMILY_KEY_WORD_RE = re.compile(r"[a-z0-9]+")
+
+
+def _family_key(hit: dict, significant_word_count: int) -> str:
+    """Bir hit'i "aynı ürün ailesi" kümesine atamak için kaba bir anahtar:
+    mağaza + başlığın ilk `significant_word_count` ANLAMLI (stopword
+    olmayan) kelimesi. Kesin bir varyant tespiti DEĞİLDİR (ML kullanmaz,
+    yalnızca metin benzerliği) -- amaç mükemmel gruplama değil, aynı
+    ürünün farklı ASIN'lerinin sayfanın en üstünde art arda kümelenmesini
+    engellemek (bkz. diversify_hits)."""
+    source = hit.get("_source", {})
+    store = str(source.get("store") or "").strip().casefold()
+    title = str(source.get("title") or "").casefold()
+    words = [w for w in _FAMILY_KEY_WORD_RE.findall(title) if w not in _FAMILY_KEY_STOPWORDS]
+    return f"{store}|{' '.join(words[:significant_word_count])}"
+
+
+def diversify_hits(hits: list[dict], cfg: "AppConfig") -> list[dict]:
+    """Hit LİSTESİNİ yeniden dizer -- hiçbir hit eklenmez/çıkarılmaz,
+    `len(sonuç) == len(hits)` her zaman doğrudur (çağıran taraf `total`ı
+    ayrıca, bu fonksiyondan BAĞIMSIZ olarak ES yanıtından hesaplar, bu
+    yüzden sayfalama/toplam sonuç sayısı hiç etkilenmez). ES'in verdiği
+    alaka sırasını korur: her "ürün ailesi"nin (bkz. _family_key) İLK
+    (yani en iyi sıralanan) temsilcisi olduğu gibi bırakılır, aynı
+    ailenin SONRAKİ tekrarları sayfanın sonuna -- kendi aralarındaki
+    göreli sırayı koruyarak -- ertelenir."""
+    rd = cfg.result_diversification
+    if not rd.enabled or len(hits) <= 1:
+        return hits
+    seen_families: set[str] = set()
+    primary: list[dict] = []
+    remaining: list[dict] = []
+    for hit in hits:
+        key = _family_key(hit, rd.significant_word_count)
+        if key not in seen_families:
+            seen_families.add(key)
+            primary.append(hit)
+        else:
+            remaining.append(hit)
+    return primary + remaining
+
+
 def search_products(
     query_text: str,
     enable_phrase: bool = True,
@@ -1769,8 +1966,8 @@ def search_products(
     döner; bu, ana ürün aramasını asla engellemez.
 
     `fetch_aggregations`: kategori keşfi için kullanılacak fetcher (bkz.
-    `discover_category_intent`); `app.py` burada kendi `st.cache_data`
-    sarmalayıcısını enjekte eder.
+    `discover_category_intent`); `api/main.py` burada kendi
+    `api/cache.py: ttl_cache` sarmalayıcısını enjekte eder.
     `config`: opsiyonel `AppConfig` override'ı (bkz. `build_search_query`);
     `resolve_intent_signals` ve `build_search_query` çağrılarına aktarılır.
 
@@ -1863,6 +2060,7 @@ def search_products(
         )
 
     hits = data.get("hits", {}).get("hits", [])
+    hits = diversify_hits(hits, cfg)
     total = data.get("hits", {}).get("total", {}).get("value", len(hits))
 
     total_pages = (total + page_size - 1) // page_size if total > 0 else 0
@@ -1870,6 +2068,15 @@ def search_products(
         total_pages = min(total_pages, pagination.max_allowed_page)
     start_item = (normalized_page - 1) * page_size + 1 if hits else 0
     end_item = start_item + len(hits) - 1 if hits else 0
+
+    did_you_mean = None
+    if cfg.spell_suggest.enabled and total <= cfg.spell_suggest.max_hits_to_trigger and "suggest" in data:
+        # `_build_did_you_mean` payload'a GÖNDERİLEN (fiyat ifadesi
+        # temizlenmiş) metne göre offset hesaplar -- burada da AYNI metni
+        # kullanmak için payload'ın kendi suggest bloğundan okunur (yeniden
+        # hesaplamak yerine), aksi halde offset'ler kayardı.
+        suggest_text = payload.get("suggest", {}).get(_SPELL_SUGGEST_NAME, {}).get("text", query_text)
+        did_you_mean = _build_did_you_mean(suggest_text, data["suggest"], cfg)
 
     return SearchResult(
         hits=hits,
@@ -1882,4 +2089,5 @@ def search_products(
         end_item=end_item,
         has_previous=normalized_page > 1,
         has_next=normalized_page < total_pages,
+        did_you_mean=did_you_mean,
     )

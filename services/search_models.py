@@ -2,9 +2,9 @@
 JSON-safe request/response tipleri — `search_service` ve `autocomplete_service`
 arasında paylaşılan veri sözleşmeleri.
 
-Bu modül Streamlit'e bağımlı DEĞİLDİR (import streamlit yok, session_state
-yok); yalnızca `dataclasses`/stdlib tipleri kullanır. İleride bir FastAPI
-endpoint'i de aynı tipleri response modeli olarak kullanabilir.
+Bu modül herhangi bir UI framework'üne bağımlı DEĞİLDİR; yalnızca
+`dataclasses`/stdlib tipleri kullanır. `api/main.py` aynı tipleri response
+modeli olarak doğrudan kullanır.
 """
 
 from __future__ import annotations
@@ -43,13 +43,14 @@ class SearchResult:
     end_item: int
     has_previous: bool
     has_next: bool
+    did_you_mean: str | None = None
 
 
 @dataclass(frozen=True)
 class SuggestionItem:
     """`autocomplete_service.get_suggestions`ın döndürdüğü tek bir öneri.
-    JSON-safe; UI katmanı (app.py) bunu component'e geçmeden önce
-    html.escape ile kaçışlar."""
+    JSON-safe; React frontend'i bu alanları render ederken JSX'in
+    varsayılan kaçışlamasına güvenir (bkz. `frontend/src/components/SearchBox.jsx`)."""
 
     title: str
     asin: str

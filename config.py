@@ -3,7 +3,7 @@ Uygulama yapılandırmasını (arama ayarları, intent kuralları, çeviri sözl
 JSON dosyalarından güvenli biçimde yükler ve doğrular.
 
 Sırlar (ELASTICSEARCH_URL, ELASTICSEARCH_API_KEY) burada değil; onlar yalnızca
-ortam değişkenlerinden okunur (bkz. app.py).
+ortam değişkenlerinden okunur (bkz. services/search_service.py).
 """
 
 from __future__ import annotations
@@ -160,8 +160,21 @@ class MultiFieldQueryConfig:
 
 @dataclass(frozen=True)
 class AutocompleteQueryConfig:
+    """`fuzzy_fallback_*`: Edge NGram `field` (`title.autocomplete`) bir
+    prefiks/fragment alanıdır -- baştaki bir harf hatası TÜM ngram
+    fragmanlarını bozar, bu yüzden doğrudan bu alana `fuzziness` eklemek
+    anlamlı sonuç vermez (fragman token'ları karşılaştırılır, kelimeler
+    değil). Bunun yerine, düz (ngram'sız) `fuzzy_fallback_field` (`title`)
+    üzerinde AYRI bir `should` fuzzy eşleşmesi eklenir -- ana `and`
+    zorunluluğunu BOZMAZ (birincil ngram eşleşmesi hâlâ tek başına
+    yeterlidir), yalnızca onun başarısız olduğu yazım hatası durumları için
+    bir yedek yol sağlar (bkz. `build_autocomplete_query`)."""
+
     field: str
     operator: str
+    fuzzy_fallback_enabled: bool
+    fuzzy_fallback_field: str
+    fuzzy_fallback_boost: float
 
 
 @dataclass(frozen=True)
@@ -192,7 +205,7 @@ class DynamicIntentConfig:
 
     Bu, `intent_rules.json`daki manuel kuralların yerini almaz; aksine
     manuel kurallar bu keşfin üzerine opsiyonel bir override katmanı olarak
-    biner (bkz. app.py: resolve_intent_signals).
+    biner (bkz. services/search_service.py: resolve_intent_signals).
     """
 
     enabled: bool
@@ -227,7 +240,7 @@ class QualityRankingConfig:
     nasıl bağlanacağını kontrol eder. `enabled=false` iken (varsayılan —
     production index'lerinde henüz kalite alanları yok) query-building hiçbir
     şey değiştirmez; alanlar mevcut olmayan eski belgelerde de sorgu asla
-    bozulmaz (bkz. app.py: `_build_quality_ranking_functions`)."""
+    bozulmaz (bkz. services/search_service.py: `_apply_quality_ranking`)."""
 
     enabled: bool
     score_field: str
@@ -276,6 +289,53 @@ class UnitMatchingConfig:
     fields: tuple[str, ...]
     boost: float
     min_query_length: int
+
+
+@dataclass(frozen=True)
+class ResultDiversificationConfig:
+    """Aynı sayfadaki hit'leri, ES'in verdiği alaka sırasını KORUYARAK
+    yeniden dizer -- hiçbir hit DÜŞÜRÜLMEZ, `total`/sayfalama hiç
+    etkilenmez (bkz. `diversify_hits`). Amaç: aynı ürünün farklı
+    varyantları (renk/boy vb. ayrı ASIN'ler) art arda kümelenip sayfayı
+    doldurmasın -- her "ürün ailesi"nin (bkz. `_family_key`: mağaza +
+    başlığın ilk `significant_word_count` anlamlı kelimesi) en iyi
+    sıralanan temsilcisi öne alınır, tekrarlar sayfanın sonuna ertelenir.
+    `enabled=false` iken sonuç sırası hiç değişmez."""
+
+    enabled: bool
+    significant_word_count: int
+
+
+@dataclass(frozen=True)
+class PriceExtractionConfig:
+    """Sorgudaki "50 dolar altı"/"under $50" gibi AÇIK fiyat kısıtlarını
+    tanıyıp `price` alanında bir `bool.filter` range'i olarak uygular
+    (bkz. `extract_price_constraint`). CLAUDE.md'nin genel must/should
+    ayrımına BİLİNÇLİ bir istisnadır (`book_title_gate` ile aynı gerekçe
+    sınıfı): kategori keşfinin aksine, ayrıştırılan bir sayısal kısıt
+    olasılıksal değil kesindir -- kullanıcı "50 dolar altı" dediğinde
+    $200'lük bir ürünün "biraz daha az alakalı" gösterilmesi değil,
+    tamamen HARİÇ tutulması beklenir. Yalnızca yüksek güvenli, açık
+    para birimi/karşılaştırma ifadeleriyle tetiklenir -- belirsiz çıplak
+    sayılar (`unit_matching`in alanı) asla fiyat kısıtı sayılmaz."""
+
+    enabled: bool
+
+
+@dataclass(frozen=True)
+class SpellSuggestConfig:
+    """Ana `_search` isteğine EKSTRA bir istek YAPMADAN (aynı payload'a
+    `suggest` bloğu eklenerek, bkz. `_build_spell_suggest_block`) ES'in
+    `term` suggester'ından "şunu mu demek istediniz?" önerisi alır.
+    Yalnızca gerçek sonuç sayısı `max_hits_to_trigger`nın altındayken
+    (zaten iyi sonuç varken gereksiz öneri gösterilmez) ve önerinin
+    puanı/frekansı `min_score`in üzerindeyken response'a eklenir."""
+
+    enabled: bool
+    field: str
+    max_hits_to_trigger: int
+    min_score: float
+    suggestion_size: int
 
 
 @dataclass(frozen=True)
@@ -533,11 +593,11 @@ class PaginationConfig:
     belirler ve bu durumda `limits.result_size`'ın yerini alır (result_size
     yalnızca `enabled=false` iken kullanılır) — bu öncelik kuralı sayesinde
     iki alan asla birbiriyle çelişmez, her zaman tek bir değer geçerlidir
-    (bkz. app.py: build_search_query).
+    (bkz. services/search_service.py: build_search_query).
 
     Elasticsearch'in varsayılan `index.max_result_window` sınırı nedeniyle
     `from + size`, `max_result_window`'ı aşamaz; aşan istekler Elasticsearch'e
-    hiç gönderilmez (bkz. app.py: PaginationLimitError). İleride bu sınırın
+    hiç gönderilmez (bkz. services/search_models.py: PaginationLimitError). İleride bu sınırın
     ötesine geçmek gerekirse `search_after` tabanlı imleçli sayfalamaya
     geçilebilir.
     """
@@ -562,9 +622,9 @@ class SourceFieldsConfig:
 @dataclass(frozen=True)
 class AutocompleteUIConfig:
     """Chrome/Google-tarzı tek autocomplete dropdown panelinin görsel
-    ayarları (bkz. components/search_input). Öneri SAYISI burada değil,
-    `limits.autocomplete_display_size`'da kontrol edilir — bu bölüm yalnızca
-    panelin nasıl göründüğünü belirler."""
+    ayarları (bkz. frontend/src/components/SearchBox.jsx). Öneri SAYISI
+    burada değil, `limits.autocomplete_display_size`'da kontrol edilir —
+    bu bölüm yalnızca panelin nasıl göründüğünü belirler."""
 
     panel_max_height_px: int
     row_height_px: int
@@ -608,6 +668,9 @@ class AppConfig:
     quality_ranking: QualityRankingConfig
     popularity_ranking: PopularityRankingConfig
     unit_matching: UnitMatchingConfig
+    result_diversification: ResultDiversificationConfig
+    price_extraction: PriceExtractionConfig
+    spell_suggest: SpellSuggestConfig
     rating_sort: RatingSortConfig
     alternate_sort: AlternateSortConfig
     accessory_penalty: AccessoryPenaltyConfig
@@ -856,6 +919,36 @@ def _build_unit_matching(raw: Any, context: str) -> UnitMatchingConfig:
     )
 
 
+def _build_result_diversification(raw: Any, context: str) -> ResultDiversificationConfig:
+    raw = _require_dict(raw, context)
+    return ResultDiversificationConfig(
+        enabled=_require_bool(raw.get("enabled"), f"{context}.enabled"),
+        significant_word_count=_require_positive_int(
+            raw.get("significant_word_count"), f"{context}.significant_word_count"
+        ),
+    )
+
+
+def _build_price_extraction(raw: Any, context: str) -> PriceExtractionConfig:
+    raw = _require_dict(raw, context)
+    return PriceExtractionConfig(
+        enabled=_require_bool(raw.get("enabled"), f"{context}.enabled"),
+    )
+
+
+def _build_spell_suggest(raw: Any, context: str) -> SpellSuggestConfig:
+    raw = _require_dict(raw, context)
+    return SpellSuggestConfig(
+        enabled=_require_bool(raw.get("enabled"), f"{context}.enabled"),
+        field=_require_str(raw.get("field"), f"{context}.field"),
+        max_hits_to_trigger=_require_positive_int(
+            raw.get("max_hits_to_trigger"), f"{context}.max_hits_to_trigger"
+        ),
+        min_score=_require_positive_number(raw.get("min_score"), f"{context}.min_score"),
+        suggestion_size=_require_positive_int(raw.get("suggestion_size"), f"{context}.suggestion_size"),
+    )
+
+
 def _build_rating_sort(raw: Any, context: str) -> RatingSortConfig:
     raw = _require_dict(raw, context)
     prior_rating = _require_positive_number(raw.get("prior_rating"), f"{context}.prior_rating")
@@ -1052,6 +1145,15 @@ def load_search_config(path: Path = SEARCH_CONFIG_PATH) -> AppConfig:
     autocomplete = AutocompleteQueryConfig(
         field=_require_str(autocomplete_raw.get("field"), "search_methods.autocomplete.field"),
         operator=_require_str(autocomplete_raw.get("operator"), "search_methods.autocomplete.operator"),
+        fuzzy_fallback_enabled=_require_bool(
+            autocomplete_raw.get("fuzzy_fallback_enabled"), "search_methods.autocomplete.fuzzy_fallback_enabled"
+        ),
+        fuzzy_fallback_field=_require_str(
+            autocomplete_raw.get("fuzzy_fallback_field"), "search_methods.autocomplete.fuzzy_fallback_field"
+        ),
+        fuzzy_fallback_boost=_require_positive_number(
+            autocomplete_raw.get("fuzzy_fallback_boost"), "search_methods.autocomplete.fuzzy_fallback_boost"
+        ),
     )
 
     search_methods = SearchMethodsConfig(
@@ -1085,6 +1187,11 @@ def load_search_config(path: Path = SEARCH_CONFIG_PATH) -> AppConfig:
     quality_ranking = _build_quality_ranking(raw.get("quality_ranking"), "quality_ranking")
     popularity_ranking = _build_popularity_ranking(raw.get("popularity_ranking"), "popularity_ranking")
     unit_matching = _build_unit_matching(raw.get("unit_matching"), "unit_matching")
+    result_diversification = _build_result_diversification(
+        raw.get("result_diversification"), "result_diversification"
+    )
+    price_extraction = _build_price_extraction(raw.get("price_extraction"), "price_extraction")
+    spell_suggest = _build_spell_suggest(raw.get("spell_suggest"), "spell_suggest")
     rating_sort = _build_rating_sort(raw.get("rating_sort"), "rating_sort")
     alternate_sort = _build_alternate_sort(raw.get("alternate_sort"), "alternate_sort")
     accessory_penalty = _build_accessory_penalty(raw.get("accessory_penalty"), "accessory_penalty")
@@ -1133,6 +1240,9 @@ def load_search_config(path: Path = SEARCH_CONFIG_PATH) -> AppConfig:
         quality_ranking=quality_ranking,
         popularity_ranking=popularity_ranking,
         unit_matching=unit_matching,
+        result_diversification=result_diversification,
+        price_extraction=price_extraction,
+        spell_suggest=spell_suggest,
         rating_sort=rating_sort,
         alternate_sort=alternate_sort,
         accessory_penalty=accessory_penalty,
