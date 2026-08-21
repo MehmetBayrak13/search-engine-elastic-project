@@ -285,6 +285,25 @@
   margin: 0.4rem 0;
 }
 
+.did-you-mean {
+  font-size: 0.92rem;
+  color: var(--muted);
+  margin: 0.6rem 0;
+}
+.did-you-mean button {
+  border: 0;
+  background: transparent;
+  color: var(--blue);
+  font-weight: 600;
+  font-size: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  padding: 0;
+}
+.did-you-mean button:hover {
+  color: var(--navy-900);
+}
+
 /* ============ LAYOUT ============ */
 .layout {
   display: grid;

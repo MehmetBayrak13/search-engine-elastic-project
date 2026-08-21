@@ -293,6 +293,21 @@ export default function App() {
           )}
           {isStale && <div className="alert alert-info">{config.messages.settings_changed_info}</div>}
           {searchError && <div className="alert alert-error">{searchError}</div>}
+          {showResults && result.did_you_mean && (
+            <p className="did-you-mean">
+              🔎{' '}
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchBoxValue(result.did_you_mean);
+                  setSearchBoxRevision((r) => r + 1);
+                  triggerExplicitSearch(result.did_you_mean);
+                }}
+              >
+                {formatMessage(config.messages.did_you_mean_cta, { suggestion: result.did_you_mean })}
+              </button>
+            </p>
+          )}
 
           {loading && <SkeletonGrid />}
 
