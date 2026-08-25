@@ -16,6 +16,25 @@ def _tmp_path_config(tmp_path_factory, data):
     return path
 
 
+def _flatten_field_evidence_matches(should):
+    """`field_relevance` clauses for a canonical field's language variants
+    (e.g. `title` + `title.tr`) are combined via `dis_max` (best-of), not
+    left as flat top-level `match` clauses (see search_service.py:
+    build_search_query, "dis_max ile birleştirilir" comment) — real Turkish
+    content is negligible in this dataset, so summing both variants'
+    scores double-counted the same evidence. This unwraps both shapes so
+    structural tests can find `match` clauses regardless of nesting."""
+    matches = [c["match"] for c in should if "match" in c]
+    for c in should:
+        if "dis_max" in c:
+            matches.extend(q["match"] for q in c["dis_max"]["queries"] if "match" in q)
+    return matches
+
+
+def _canonical_field_relevance_count(cfg):
+    return len({f.field[:-3] if f.field.endswith(".tr") else f.field for f in cfg.field_relevance.fields})
+
+
 def _innermost_query(query_node):
     """Test helper: `build_search_query` now wraps the base `{"bool": ...}`
     query in a `field_consensus` `function_score` (Task 3) — and optionally
@@ -177,7 +196,7 @@ def test_field_relevance_produces_one_match_clause_per_configured_field():
         apply_intent_reranking=False,
     )
     should = _innermost_query(payload["query"])["bool"]["must"][0]["bool"]["should"]
-    match_clauses = [c["match"] for c in should if "match" in c]
+    match_clauses = _flatten_field_evidence_matches(should)
     matched_field_names = {name for clause in match_clauses for name in clause}
     for entry in search_service.CONFIG.field_relevance.fields:
         assert entry.field in matched_field_names
@@ -230,7 +249,11 @@ def test_field_relevance_disabled_by_enable_multi_match_toggle():
     with_count = len(_innermost_query(with_it["query"])["bool"]["must"][0]["bool"]["should"])
     without_count = len(_innermost_query(without_it["query"])["bool"]["must"][0]["bool"]["should"])
     assert without_count == 1  # exact_asin only
-    assert with_count == without_count + len(search_service.CONFIG.field_relevance.fields) + 1
+    # field_relevance fields collapse to one `dis_max` clause per CANONICAL
+    # field (a field + its `.tr` variant share one dis_max — see
+    # _flatten_field_evidence_matches), not one flat clause per config
+    # entry; +1 for the cross_fields fallback clause.
+    assert with_count == without_count + _canonical_field_relevance_count(search_service.CONFIG) + 1
 
 
 def test_token_translation_only_query_does_not_crash_and_uses_field_relevance_fields():
@@ -344,7 +367,8 @@ def test_field_relevance_debug_names_present_only_when_requested():
 
     def _has_any_name(payload):
         should = _innermost_query(payload["query"])["bool"]["must"][0]["bool"]["should"]
-        return any("_name" in c.get("match", {}).get(f, {}) for c in should for f in c.get("match", {}))
+        match_clauses = _flatten_field_evidence_matches(should)
+        return any("_name" in clause.get(f, {}) for clause in match_clauses for f in clause)
 
     assert not _has_any_name(without_debug)
     assert _has_any_name(with_debug)

@@ -83,10 +83,16 @@ def test_english_query_without_translation_match_is_unaffected():
     with_translation = search_service.build_search_query("wireless headphones", apply_intent_reranking=False)
     lexical = _innermost_query(with_translation["query"])["bool"]["must"][0]["bool"]["should"]
     # Çeviri sözlüğünde eşleşme yok; asin(1) + phrase(1) + field_relevance
-    # (8 alan + 1 cross_fields = 9, eski tekli multi_match'in YERİNE geçti)
-    # + fuzzy(1) + title_ranking'in bağımsız 2 katmanı (exact + prefix) = 14,
-    # çeviri alternatifi olmamalı.
-    assert len(lexical) == 1 + 1 + len(search_service.CONFIG.field_relevance.fields) + 1 + 1 + 2
+    # (her KANONİK alan bir dis_max maddesi -- title/title.tr gibi dil
+    # varyantları tek maddede birleşir, bkz. search_service.py: build_search_query
+    # "dis_max ile birleştirilir" -- + 1 cross_fields) + fuzzy(1) +
+    # title_ranking'in bağımsız 2 katmanı (exact + prefix), çeviri
+    # alternatifi olmamalı.
+    canonical_field_count = len({
+        f.field[:-3] if f.field.endswith(".tr") else f.field
+        for f in search_service.CONFIG.field_relevance.fields
+    })
+    assert len(lexical) == 1 + 1 + canonical_field_count + 1 + 1 + 2
 
 
 def test_autocomplete_translation_only_adds_full_phrase_alternatives():

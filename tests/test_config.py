@@ -78,6 +78,8 @@ def _minimal_search_config(**overrides):
             "search_fields": {"title": 4, "categories_text": 6},
             "aggregation_fields": ["categories", "main_category"],
             "negative_category_penalty": 0.5,
+            "store_candidate_boost": 1.5,
+            "min_background_doc_count": 500,
         },
         "quality_ranking": {
             "enabled": False,

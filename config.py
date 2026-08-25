@@ -223,6 +223,26 @@ class DynamicIntentConfig:
     # `aggregation_fields`te yoksa ya da keşif hiç aday üretmezse (fail-safe)
     # bu alan hiç etkisiz kalır — asla tek başına belge dışlamaz.
     negative_category_penalty: float
+    # `store` aggregation'ından gelen adaylar için AYRI, `boost`tan daha
+    # düşük bir tavan (bkz. services/intent_service.py: resolve_intent_signals).
+    # Sebep: `store` marka tespiti için var ("nike sneakers" -> "Nike"), ama
+    # `significant_terms` bazen bir cins-ismi (ör. "mouse") istatistiksel
+    # olarak bir markayla/karakterle (Disney/"Mickey Mouse") ilişkilendirir —
+    # bu durumda tam `boost` uygulamak yanlış anlamı öne çıkarır. Marka
+    # sorgularında (query TAMAMEN markayla örtüşen kısa sorgular) hâlâ bir
+    # miktar sinyal kalsın diye tamamen sıfırlanmaz, yalnızca küçültülür.
+    store_candidate_boost: float
+    # `significant_terms`in bilinen istatistiksel zaafı: bir bucket'ın TOPLAM
+    # kataloğu (bg_count) çok küçükse (ör. bir mağazanın toplam 10 ürünü
+    # varsa), bu sorguyla eşleşen birkaç ürünü bile oranı patlatıp devasa bir
+    # skor üretebilir (bkz. canlı doğrulama: "wireless headphones" sorgusunda
+    # bg_count=10 olan "rosky" skoru 6220, bg_count=8005 olan gerçek
+    # "all electronics" kategorisinin skoru 48 -- 130 kat fark, tamamen
+    # örneklem küçüklüğünden). Bu eşiğin ALTINDA bg_count'a sahip adaylar
+    # discover_category_intent tarafından tamamen elenir. `bg_count` alanı
+    # yanıtta yoksa (eski/mock `terms`-şekilli test verisi) aday HİÇ
+    # filtrelenmez -- yalnızca gerçek significant_terms yanıtlarını etkiler.
+    min_background_doc_count: int
 
     @property
     def es_search_fields(self) -> list[str]:
@@ -779,6 +799,12 @@ def _build_dynamic_intent(raw: Any, context: str) -> DynamicIntentConfig:
         aggregation_fields=aggregation_fields,
         negative_category_penalty=_require_positive_number(
             raw.get("negative_category_penalty"), f"{context}.negative_category_penalty", allow_zero=True
+        ),
+        store_candidate_boost=_require_positive_number(
+            raw.get("store_candidate_boost"), f"{context}.store_candidate_boost", allow_zero=True
+        ),
+        min_background_doc_count=_require_positive_int(
+            raw.get("min_background_doc_count"), f"{context}.min_background_doc_count"
         ),
     )
 

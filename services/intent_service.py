@@ -207,10 +207,20 @@ def resolve_intent_signals(
         if key in seen_dynamic:
             continue
         seen_dynamic.add(key)
+        # `store` adayları ayrı, daha düşük bir tavan kullanır (bkz.
+        # DynamicIntentConfig.store_candidate_boost docstring'i) — bir cins-
+        # ismin (ör. "mouse") istatistiksel olarak bir markayla/karakterle
+        # (Disney/"Mickey Mouse") çakışması, marka sorgularında ("nike
+        # sneakers") olduğu gibi tam ağırlıkla boost almamalı.
+        candidate_boost = (
+            cfg.dynamic_intent.store_candidate_boost
+            if candidate["field"] == "store"
+            else cfg.dynamic_intent.boost
+        )
         dynamic_positive.append({
             "value": candidate["value"],
             "field": candidate["field"],
-            "boost": cfg.dynamic_intent.boost,
+            "boost": candidate_boost,
             "source": "dynamic",
         })
     dynamic_positive = (

@@ -341,9 +341,11 @@ def test_search_forwards_enable_fuzzy_toggle(monkeypatch):
 
 
 def test_search_forwards_enable_multi_match_toggle(monkeypatch):
-    # field_relevance contributes one clause per configured field plus one
-    # cross_fields fallback clause (see test_field_relevance_disabled_by_enable_multi_match_toggle
-    # in test_query_builders.py for the same assertion at the service level).
+    # field_relevance contributes one `dis_max` clause per CANONICAL field
+    # (a field + its `.tr` variant share one dis_max, see search_service.py:
+    # build_search_query) plus one cross_fields fallback clause (see
+    # test_field_relevance_disabled_by_enable_multi_match_toggle in
+    # test_query_builders.py for the same assertion at the service level).
     captured_with = _capture_payloads(monkeypatch)
     client.get("/api/search", params={"q": "gadget"})
     with_should = _innermost_query(_main_payload(captured_with)["query"])["bool"]["must"][0]["bool"]["should"]
@@ -352,7 +354,11 @@ def test_search_forwards_enable_multi_match_toggle(monkeypatch):
     client.get("/api/search", params={"q": "gadget", "enable_multi_match": False})
     without_should = _innermost_query(_main_payload(captured_without)["query"])["bool"]["must"][0]["bool"]["should"]
 
-    expected_delta = len(search_service.CONFIG.field_relevance.fields) + 1
+    canonical_field_count = len({
+        f.field[:-3] if f.field.endswith(".tr") else f.field
+        for f in search_service.CONFIG.field_relevance.fields
+    })
+    expected_delta = canonical_field_count + 1
     assert len(without_should) == len(with_should) - expected_delta
 
 

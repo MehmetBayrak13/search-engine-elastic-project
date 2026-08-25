@@ -515,6 +515,17 @@ def discover_category_intent(
             value = bucket.get("key")
             if not value:
                 continue
+            # `significant_terms`in bilinen küçük-örneklem zaafı: bir bucket'ın
+            # TOPLAM kataloğu (bg_count) çok küçükse, bu sorguyla eşleşen
+            # birkaç ürün bile oranı patlatıp devasa bir skor üretebilir (bkz.
+            # canlı doğrulama: "wireless headphones" sorgusunda bg_count=10
+            # olan mağaza "rosky" skoru 6220, bg_count=8005 olan gerçek
+            # "all electronics" kategorisinin skoru 48 -- saf istatistiksel
+            # gürültü, gerçek bir sinyal değil). `bg_count` alanı yanıtta yoksa
+            # (eski/mock `terms`-şekilli test verisi) hiç filtrelenmez.
+            bg_count = bucket.get("bg_count")
+            if bg_count is not None and bg_count < dyn.min_background_doc_count:
+                continue
             candidates.append({
                 "value": value,
                 "field": field,
@@ -1621,7 +1632,24 @@ def build_search_query(
         name_prefix = "field" if include_relevance_debug else None
         field_relevance_evidence = _build_field_evidence_clauses(query_text, cfg, name_prefix=name_prefix)
         for clauses in field_relevance_evidence.values():
-            lexical_queries.extend(clauses)
+            # Aynı kanonik alanın dil varyantları (`title` + `title.tr`) BURADA
+            # `dis_max` (en iyisini al) ile birleştirilir, `should` toplamıyla
+            # DEĞİL. Bu veri setinde gerçek Türkçe içerik neredeyse yok (bkz.
+            # CLAUDE.md §11 stemmer araştırması — 5.9M belgede 8 tanesi), yani
+            # `.tr` alanı pratikte İngilizce içeriğin aynı metnini taşıyor;
+            # ikisini de ayrı ayrı toplamak aynı kanıtı iki kere saymak
+            # anlamına geliyordu (ör. "mouse" sorgusunda title+title.tr'in
+            # AYRI AYRI skorlanması, tek bir gerçek eşleşmeyi suni şekilde
+            # şişiriyordu). `title` ile `features` gibi FARKLI kanonik
+            # alanların toplanması (field consensus'un dayandığı davranış)
+            # buradan ETKİLENMEZ — yalnızca AYNI kanonik alanın birden fazla
+            # dil/analiz varyantı tek maddeye indirgeniyor. `_apply_field_consensus`
+            # zaten kendi kademe sayımını bu maddelerden YENİDEN türetir (bkz.
+            # `_consensus_tier_filter`), bu değişiklikten etkilenmez.
+            if len(clauses) > 1:
+                lexical_queries.append({"dis_max": {"queries": clauses}})
+            else:
+                lexical_queries.extend(clauses)
         lexical_queries.append(
             _build_cross_fields_clause(query_text, cfg, include_relevance_debug=include_relevance_debug)
         )
