@@ -132,6 +132,13 @@ def otel_debug():
     if hasattr(tracer_provider, "force_flush"):
         flush_result = tracer_provider.force_flush()
 
+    meter_flush_result = None
+    try:
+        if hasattr(meter_provider, "force_flush"):
+            meter_flush_result = meter_provider.force_flush()
+    except Exception as exc:
+        meter_flush_result = f"{type(exc).__name__}: {exc}"
+
     raw_probe = None
     try:
         import requests as _requests
@@ -210,6 +217,7 @@ def otel_debug():
         "meter_provider_type": type(meter_provider).__name__,
         "tracer_provider_module": type(tracer_provider).__module__,
         "force_flush_result": flush_result,
+        "meter_force_flush_result": meter_flush_result,
         "raw_http_probe": raw_probe,
         "direct_exporter_result": direct_export,
         "headers_env_shape": headers_shape,
