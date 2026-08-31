@@ -43,7 +43,7 @@ export function getHealth() {
   return request('/api/health');
 }
 
-export function searchProducts({ query, page, enablePhrase, enableMultiMatch, enableFuzzy, enableExactAsin, sort }) {
+export function searchProducts({ query, page, enablePhrase, enableMultiMatch, enableFuzzy, enableExactAsin, enablePriceExtraction, sort }) {
   return request('/api/search', {
     q: query,
     page,
@@ -51,6 +51,7 @@ export function searchProducts({ query, page, enablePhrase, enableMultiMatch, en
     enable_multi_match: enableMultiMatch,
     enable_fuzzy: enableFuzzy,
     enable_exact_asin: enableExactAsin,
+    enable_price_extraction: enablePriceExtraction,
     sort,
     // Ek bir Elasticsearch isteği YAPMAZ (bkz. api/main.py: relevance_debug_from_matched_queries
     // docstring'i) -- aynı yanıttan, sorguya eklenen `_name`'ler sayesinde okunur.

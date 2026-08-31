@@ -68,6 +68,7 @@ def _require_str_list(value: Any, context: str, allow_empty: bool = False) -> tu
     return tuple(value)
 
 
+# !!!! 5 -- config doğrulama (bozuk bir değer sessizce geçmez, hemen hata verir)
 def _require_positive_number(value: Any, context: str, allow_zero: bool = False) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ConfigError(f"{context} sayı olmalı, alınan: {value!r}")

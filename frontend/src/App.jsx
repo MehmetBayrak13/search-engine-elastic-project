@@ -19,6 +19,7 @@ const DEFAULT_FLAGS = {
   enableMultiMatch: true,
   enableFuzzy: true,
   enableExactAsin: true,
+  enablePriceExtraction: true,
 };
 
 function flagsSignature(flags) {
@@ -94,6 +95,7 @@ export default function App() {
         enableMultiMatch: activeFlags.enableMultiMatch,
         enableFuzzy: activeFlags.enableFuzzy,
         enableExactAsin: activeFlags.enableExactAsin,
+        enablePriceExtraction: activeFlags.enablePriceExtraction,
         sort: sortValue,
       });
       setResult(data);

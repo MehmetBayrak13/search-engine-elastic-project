@@ -3,6 +3,7 @@ const TOGGLE_DEFS = [
   { key: 'enableMultiMatch', labelKey: 'toggle_multi_match', helpKey: 'toggle_multi_match' },
   { key: 'enableFuzzy', labelKey: 'toggle_fuzzy', helpKey: 'toggle_fuzzy' },
   { key: 'enableExactAsin', labelKey: 'toggle_exact_asin', helpKey: 'toggle_exact_asin' },
+  { key: 'enablePriceExtraction', labelKey: 'toggle_price_extraction', helpKey: 'toggle_price_extraction' },
 ];
 
 function Switch({ checked, onChange, label }) {

@@ -328,6 +328,18 @@ def test_search_forwards_enable_exact_asin_toggle(monkeypatch):
     assert len(without_should) == len(with_should) - 1
 
 
+def test_search_forwards_enable_price_extraction_toggle(monkeypatch):
+    captured_with = _capture_payloads(monkeypatch)
+    client.get("/api/search", params={"q": "under $50 headphones"})
+    with_query = _innermost_query(_main_payload(captured_with)["query"])
+    assert "filter" in with_query["bool"]
+
+    captured_without = _capture_payloads(monkeypatch)
+    client.get("/api/search", params={"q": "under $50 headphones", "enable_price_extraction": False})
+    without_query = _innermost_query(_main_payload(captured_without)["query"])
+    assert "filter" not in without_query["bool"]
+
+
 def test_search_forwards_enable_fuzzy_toggle(monkeypatch):
     captured_with = _capture_payloads(monkeypatch)
     client.get("/api/search", params={"q": "gadget"})

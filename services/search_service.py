@@ -151,6 +151,7 @@ def _resolve_token_variants(token: str, translations, synonyms) -> tuple[str, ..
     return ()
 
 
+# !!!! 2 -- çeviri (kablosuz kulaklık -> wireless headphones)
 def expand_multilingual_query(query_text: str, translations=None, synonyms=None) -> dict:
     """
     Bir sorguyu hem diller arası (Türkçe -> İngilizce, `query_translations.json`)
@@ -1213,6 +1214,7 @@ def extract_price_constraint(query_text: str) -> dict | None:
     return {"max_price": value} if direction == "max" else {"min_price": value}
 
 
+# !!!! 3 -- fiyat aralığı filtresi
 def _price_constraint_filter_clause(query_text: str, cfg: "AppConfig") -> dict | None:
     """`extract_price_constraint`i tek bir `range` filter maddesine çevirir.
     `bool.filter` içinde yaşar (score'a katkısı yoktur, yalnızca
@@ -1496,6 +1498,7 @@ def build_search_query(
     enable_multi_match: bool = True,
     enable_fuzzy: bool = True,
     enable_exact_asin: bool = True,
+    enable_price_extraction: bool = True,
     result_size: int | None = None,
     page: int = 1,
     page_size: int | None = None,
@@ -1579,7 +1582,7 @@ def build_search_query(
     # (temizlemeden ÖNCE) hesaplanır ve aşağıda `bool.filter`e olduğu gibi
     # eklenir; `query_text` bu noktadan itibaren ise TEMİZLENMİŞ hâliyle
     # geri kalan tüm lexical/intent/çeviri mantığına akar.
-    price_filter = _price_constraint_filter_clause(query_text, cfg)
+    price_filter = _price_constraint_filter_clause(query_text, cfg) if enable_price_extraction else None
     if price_filter is not None:
         price_match, _ = _find_price_match(query_text)
         query_text = " ".join(
@@ -1693,7 +1696,7 @@ def build_search_query(
             }
         })
 
-    # Hiç lexical yöntem yoksa güvenlik ağı.
+    # !!!! 1 -- Hiç lexical yöntem yoksa güvenlik ağı.
     if not lexical_queries:
         payload = {
             "size": size,
@@ -1897,6 +1900,7 @@ def _probe_max_relevance_score(
     enable_multi_match: bool,
     enable_fuzzy: bool,
     enable_exact_asin: bool,
+    enable_price_extraction: bool,
     intent_signals: "IntentSignals",
     cfg: "AppConfig",
 ) -> float | None:
@@ -1913,6 +1917,7 @@ def _probe_max_relevance_score(
         enable_multi_match=enable_multi_match,
         enable_fuzzy=enable_fuzzy,
         enable_exact_asin=enable_exact_asin,
+        enable_price_extraction=enable_price_extraction,
         page=1,
         page_size=1,
         track_total_hits=False,
@@ -1945,6 +1950,7 @@ def _family_key(hit: dict, significant_word_count: int) -> str:
     return f"{store}|{' '.join(words[:significant_word_count])}"
 
 
+# !!!! 4 -- sonuç çeşitliliği
 def diversify_hits(hits: list[dict], cfg: "AppConfig") -> list[dict]:
     """Hit LİSTESİNİ yeniden dizer -- hiçbir hit eklenmez/çıkarılmaz,
     `len(sonuç) == len(hits)` her zaman doğrudur (çağıran taraf `total`ı
@@ -1976,6 +1982,7 @@ def search_products(
     enable_multi_match: bool = True,
     enable_fuzzy: bool = True,
     enable_exact_asin: bool = True,
+    enable_price_extraction: bool = True,
     page: int = 1,
     sort: str = "relevance",
     *,
@@ -2028,7 +2035,7 @@ def search_products(
     if sort != "relevance" and cfg.alternate_sort.enabled:
         probe_max_score = _probe_max_relevance_score(
             query_text, enable_phrase, enable_multi_match, enable_fuzzy, enable_exact_asin,
-            intent_signals, cfg,
+            enable_price_extraction, intent_signals, cfg,
         )
         if probe_max_score is not None:
             min_score = probe_max_score * cfg.alternate_sort.min_score_ratio
@@ -2040,6 +2047,7 @@ def search_products(
             enable_multi_match=enable_multi_match,
             enable_fuzzy=enable_fuzzy,
             enable_exact_asin=enable_exact_asin,
+            enable_price_extraction=enable_price_extraction,
             result_size=cfg.limits.result_size,
             page=normalized_page,
             track_total_hits=True,

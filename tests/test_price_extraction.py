@@ -91,6 +91,23 @@ def test_price_constraint_does_not_gate_lexical_search():
     assert len(must) == 1
 
 
+def test_enable_price_extraction_false_ignores_price_phrase():
+    # `enable_price_extraction=False` -- diğer üç yöntem (phrase/multi_match/
+    # fuzzy/exact_asin) gibi istek bazlı bir toggle. Kapalıyken hem filtre
+    # eklenmemeli hem de fiyat ifadesi lexical metinden ÇIKARILMAMALI (eski
+    # davranış: "under"/"$50" olduğu gibi aranır, muhtemelen az sonuç verir
+    # -- bu bilerek geri getirilen "kapalı" davranıştır).
+    payload = search_service.build_search_query(
+        "under $50 headphones", apply_intent_reranking=False, enable_price_extraction=False
+    )
+    inner = _innermost_query(payload["query"])
+    assert "filter" not in inner["bool"]
+
+    should = inner["bool"]["must"][0]["bool"]["should"]
+    phrase_clause = next(c["match_phrase"]["title"]["query"] for c in should if "match_phrase" in c)
+    assert phrase_clause == "under $50 headphones"
+
+
 def test_price_extraction_disabled_via_config_ignores_price_phrases(tmp_path_factory):
     from services.search_service import build_search_query
     from config import load_search_config

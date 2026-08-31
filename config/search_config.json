@@ -229,6 +229,7 @@
       "toggle_multi_match": "Çok alanlı arama",
       "toggle_fuzzy": "Yazım hatası toleransı",
       "toggle_exact_asin": "ASIN önceliği",
+      "toggle_price_extraction": "Fiyat aralığı filtresi",
       "toggle_live_suggestions": "Canlı öneriler",
       "system_status_title": "Sistem Durumu",
       "status_connected": "Bağlı",
@@ -262,6 +263,7 @@
       "toggle_multi_match": "Başlık, kategori, açıklama ve özelliklerde arar.",
       "toggle_fuzzy": "Yanlış yazılmış kelimelere yakın sonuçlar bulur.",
       "toggle_exact_asin": "Tam ürün kodu eşleşmesini en üste taşır.",
+      "toggle_price_extraction": "\"50 doların altı\" gibi ifadeleri fiyat filtresine çevirir.",
       "toggle_live_suggestions": "Yazarken en alakalı 5 ürünü gösterir."
     },
     "messages": {
