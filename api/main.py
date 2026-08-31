@@ -152,7 +152,7 @@ def otel_debug():
         raw_probe = {
             "status_code": resp.status_code,
             "response_text": resp.text[:300],
-            "header_keys_sent": list(headers.keys()),
+            "header_names_sent": [k for k in headers.keys() if len(k) < 40],
         }
     except Exception as exc:
         raw_probe = {"error": f"{type(exc).__name__}: {exc}"}
