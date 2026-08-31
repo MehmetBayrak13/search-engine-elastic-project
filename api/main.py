@@ -157,6 +157,42 @@ def otel_debug():
     except Exception as exc:
         raw_probe = {"error": f"{type(exc).__name__}: {exc}"}
 
+    direct_export = None
+    try:
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+
+        captured = []
+
+        class _CaptureProcessor(SimpleSpanProcessor):
+            def __init__(self):
+                pass
+
+            def on_end(self, span):
+                captured.append(span)
+
+            def shutdown(self):
+                pass
+
+            def force_flush(self, timeout_millis=30000):
+                return True
+
+        capture_provider = TracerProvider()
+        capture_provider.add_span_processor(_CaptureProcessor())
+        capture_tracer = capture_provider.get_tracer("otel-debug-direct")
+        with capture_tracer.start_as_current_span("otel-debug-direct-span"):
+            pass
+
+        if captured:
+            fresh_exporter = OTLPSpanExporter()
+            export_result = fresh_exporter.export(captured)
+            direct_export = str(export_result)
+        else:
+            direct_export = "no span captured"
+    except Exception as exc:
+        direct_export = f"{type(exc).__name__}: {exc}"
+
     headers_raw = os.getenv("OTEL_EXPORTER_OTLP_HEADERS", "")
     headers_shape = {
         "length": len(headers_raw),
@@ -175,6 +211,7 @@ def otel_debug():
         "tracer_provider_module": type(tracer_provider).__module__,
         "force_flush_result": flush_result,
         "raw_http_probe": raw_probe,
+        "direct_exporter_result": direct_export,
         "headers_env_shape": headers_shape,
         "otel_env": {
             "OTEL_EXPORTER_OTLP_ENDPOINT": os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
