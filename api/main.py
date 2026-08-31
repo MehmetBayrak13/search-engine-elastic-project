@@ -132,11 +132,37 @@ def otel_debug():
     if hasattr(tracer_provider, "force_flush"):
         flush_result = tracer_provider.force_flush()
 
+    raw_probe = None
+    try:
+        import requests as _requests
+
+        endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "").rstrip("/")
+        headers_raw = os.getenv("OTEL_EXPORTER_OTLP_HEADERS", "")
+        headers = {}
+        for pair in headers_raw.split(","):
+            if "=" in pair:
+                key, value = pair.split("=", 1)
+                headers[key.strip()] = value.strip()
+        resp = _requests.post(
+            f"{endpoint}/v1/traces",
+            headers={**headers, "Content-Type": "application/x-protobuf"},
+            data=b"",
+            timeout=10,
+        )
+        raw_probe = {
+            "status_code": resp.status_code,
+            "response_text": resp.text[:300],
+            "header_keys_sent": list(headers.keys()),
+        }
+    except Exception as exc:
+        raw_probe = {"error": f"{type(exc).__name__}: {exc}"}
+
     return {
         "tracer_provider_type": type(tracer_provider).__name__,
         "meter_provider_type": type(meter_provider).__name__,
         "tracer_provider_module": type(tracer_provider).__module__,
         "force_flush_result": flush_result,
+        "raw_http_probe": raw_probe,
         "otel_env": {
             "OTEL_EXPORTER_OTLP_ENDPOINT": os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
             "OTEL_SERVICE_NAME": os.getenv("OTEL_SERVICE_NAME"),
