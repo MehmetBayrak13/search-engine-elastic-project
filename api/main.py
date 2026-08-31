@@ -113,6 +113,39 @@ def _hit_to_product(hit: dict) -> dict:
     }
 
 
+@app.get("/api/_otel_debug")
+def otel_debug():
+    """Geçici teşhis endpoint'i: OTel SDK gerçekten kuruldu mu, yoksa
+    auto-instrumentation hiç devreye girmeden no-op (Proxy*) provider'lar mı
+    kaldı — export/ağ sorunlarından ayırt etmek için. Sorun bulununca
+    kaldırılacak."""
+    from opentelemetry import metrics, trace
+
+    tracer_provider = trace.get_tracer_provider()
+    meter_provider = metrics.get_meter_provider()
+
+    tracer = trace.get_tracer("otel-debug")
+    with tracer.start_as_current_span("otel-debug-span"):
+        pass
+
+    flush_result = None
+    if hasattr(tracer_provider, "force_flush"):
+        flush_result = tracer_provider.force_flush()
+
+    return {
+        "tracer_provider_type": type(tracer_provider).__name__,
+        "meter_provider_type": type(meter_provider).__name__,
+        "tracer_provider_module": type(tracer_provider).__module__,
+        "force_flush_result": flush_result,
+        "otel_env": {
+            "OTEL_EXPORTER_OTLP_ENDPOINT": os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
+            "OTEL_SERVICE_NAME": os.getenv("OTEL_SERVICE_NAME"),
+            "OTEL_LOG_LEVEL": os.getenv("OTEL_LOG_LEVEL"),
+            "headers_set": bool(os.getenv("OTEL_EXPORTER_OTLP_HEADERS")),
+        },
+    }
+
+
 @app.get("/api/health")
 def health():
     error = _check_configuration()
