@@ -157,12 +157,25 @@ def otel_debug():
     except Exception as exc:
         raw_probe = {"error": f"{type(exc).__name__}: {exc}"}
 
+    headers_raw = os.getenv("OTEL_EXPORTER_OTLP_HEADERS", "")
+    headers_shape = {
+        "length": len(headers_raw),
+        "starts_with_Authorization=": headers_raw.startswith("Authorization="),
+        "starts_with_OTEL_EXPORTER": headers_raw.startswith("OTEL_EXPORTER"),
+        "count_equals_signs": headers_raw.count("="),
+        "count_commas": headers_raw.count(","),
+        "has_leading_or_trailing_whitespace": headers_raw != headers_raw.strip(),
+        "has_surrounding_quotes": headers_raw.startswith('"') or headers_raw.startswith("'"),
+        "contains_newline": "\n" in headers_raw,
+    }
+
     return {
         "tracer_provider_type": type(tracer_provider).__name__,
         "meter_provider_type": type(meter_provider).__name__,
         "tracer_provider_module": type(tracer_provider).__module__,
         "force_flush_result": flush_result,
         "raw_http_probe": raw_probe,
+        "headers_env_shape": headers_shape,
         "otel_env": {
             "OTEL_EXPORTER_OTLP_ENDPOINT": os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
             "OTEL_SERVICE_NAME": os.getenv("OTEL_SERVICE_NAME"),
