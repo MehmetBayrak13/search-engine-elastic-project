@@ -1,0 +1,34 @@
+name: Dummy traffic generator
+
+# Team lead'in RPS/gecikme izlemesi için (bkz. Honeycomb) canlı siteye
+# düzenli aralıklarla gerçekçi arama istekleri gönderir. Render'ın ücretsiz
+# planındaki uykuya dalmayı da (inactivity spin-down) engeller.
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  send-traffic:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send sample search requests
+        run: |
+          BASE_URL="https://search-engine-elastic-project.onrender.com/api/search"
+          QUERIES=(
+            "wireless headphones"
+            "gaming mouse"
+            "coffee maker"
+            "phone case"
+            "running shoes"
+            "kablosuz kulaklık"
+            "toilet paper"
+            "smart watch"
+          )
+          for q in "${QUERIES[@]}"; do
+            encoded=$(python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1]))" "$q")
+            code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 "${BASE_URL}?q=${encoded}")
+            echo "GET /api/search?q=${q} -> ${code}"
+            sleep 2
+          done
