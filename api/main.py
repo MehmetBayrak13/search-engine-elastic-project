@@ -27,6 +27,7 @@ import os
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from opentelemetry import trace
 
 from api.cache import ttl_cache
 from services import autocomplete_service, search_service
@@ -64,12 +65,12 @@ _DISCOVERY_CACHE_TTL = CONFIG.dynamic_intent.cache_ttl_seconds if CONFIG else 30
 _AUTOCOMPLETE_CACHE_TTL = CONFIG.limits.autocomplete_cache_ttl_seconds if CONFIG else 30
 
 
-@ttl_cache(_DISCOVERY_CACHE_TTL)
+@ttl_cache(_DISCOVERY_CACHE_TTL, name="category_discovery")
 def _fetch_category_aggregations(query_text: str, extra_query_texts: tuple[str, ...]):
     return search_service.fetch_category_aggregations(query_text, extra_query_texts)
 
 
-@ttl_cache(_AUTOCOMPLETE_CACHE_TTL)
+@ttl_cache(_AUTOCOMPLETE_CACHE_TTL, name="autocomplete")
 def _fetch_suggestion_hits(query_text: str, result_size: int):
     return autocomplete_service.fetch_suggestion_hits(query_text, result_size)
 
@@ -205,6 +206,24 @@ def search(
     if intent_name and intent_name in INTENT_RULES:
         rule = INTENT_RULES[intent_name]
         intent_payload = {"name": intent_name, "label": rule.label, "icon": rule.icon or config.ui.intent_fallback_icon}
+
+    # Honeycomb'da arama davranışını (sadece HTTP durumunu değil) görmek için
+    # geçerli isteğin span'ine iş mantığı verisi ekleniyor -- ekstra span/istek
+    # yok, zaten var olan ASGI server span'i işaretleniyor.
+    span = trace.get_current_span()
+    span.set_attribute("search.query", query_text[:200])
+    span.set_attribute("search.query_length", len(query_text))
+    span.set_attribute("search.total_hits", result.total)
+    span.set_attribute("search.zero_results", result.total == 0)
+    span.set_attribute("search.page", page)
+    span.set_attribute("search.sort", sort)
+    span.set_attribute("search.enable_phrase", enable_phrase)
+    span.set_attribute("search.enable_multi_match", enable_multi_match)
+    span.set_attribute("search.enable_fuzzy", enable_fuzzy)
+    span.set_attribute("search.enable_exact_asin", enable_exact_asin)
+    span.set_attribute("search.enable_price_extraction", enable_price_extraction)
+    if intent_name:
+        span.set_attribute("search.intent", intent_name)
 
     response_payload = {
         "query": query_text,

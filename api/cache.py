@@ -25,13 +25,22 @@ from collections import OrderedDict
 from functools import wraps
 from typing import Any, Callable
 
+from opentelemetry import trace
+
 _DEFAULT_MAX_ENTRIES = 2000
 
 
-def ttl_cache(ttl_seconds: float, max_entries: int = _DEFAULT_MAX_ENTRIES):
+def ttl_cache(ttl_seconds: float, max_entries: int = _DEFAULT_MAX_ENTRIES, name: str | None = None):
+    """`name` verilirse, her çağrıda geçerli OTel span'ine
+    `cache.<name>.hit` (bool) attribute'u eklenir -- Honeycomb'da önbellek
+    isabet oranını görmek için. `trace.get_current_span()` aktif bir span
+    yokken no-op bir span döner, bu yüzden testlerde/OTel'siz çalıştırmada
+    güvenlidir."""
+
     def decorator(func: Callable) -> Callable:
         store: "OrderedDict[tuple, tuple[float, Any]]" = OrderedDict()
         lock = threading.Lock()
+        cache_name = name or func.__name__
 
         @wraps(func)
         def wrapper(*args, **kwargs):
@@ -42,8 +51,10 @@ def ttl_cache(ttl_seconds: float, max_entries: int = _DEFAULT_MAX_ENTRIES):
                 if cached is not None:
                     if cached[0] > now:
                         store.move_to_end(key)
+                        trace.get_current_span().set_attribute(f"cache.{cache_name}.hit", True)
                         return cached[1]
                     del store[key]
+            trace.get_current_span().set_attribute(f"cache.{cache_name}.hit", False)
             result = func(*args, **kwargs)
             with lock:
                 store[key] = (now + ttl_seconds, result)
