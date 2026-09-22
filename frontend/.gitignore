@@ -12,6 +12,8 @@ dist
 dist-ssr
 *.local
 .env
+/public/downloads/*.zip
+/public/downloads/*.sha256
 
 # Editor directories and files
 .vscode/*
