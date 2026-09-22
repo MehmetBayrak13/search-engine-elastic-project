@@ -1132,3 +1132,14 @@
     font-size: 12.5px;
   }
 }
+.download-entry { display: flex; align-items: center; gap: 12px; }
+.download-button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 9px 15px; background: var(--cta); border: 1px solid transparent; border-radius: 8px; color: #17212e; font-weight: 700; text-decoration: none; white-space: nowrap; }
+.download-button:hover { filter: brightness(1.1); }
+.download-button:focus-visible { outline: 3px solid #fff; outline-offset: 3px; }
+.download-caption { max-width: 180px; font-size: 11px; line-height: 1.4; color: #d5e1ef; }
+.page-waiting { min-height: calc(100vh - 68px); display: grid; place-items: center; color: var(--muted); }
+@media (max-width: 700px) {
+  .topbar { flex-wrap: wrap; gap: 12px; }
+  .topbar-status { flex-wrap: wrap; gap: 12px; }
+  .download-caption { max-width: 150px; }
+}

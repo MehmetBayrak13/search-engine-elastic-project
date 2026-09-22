@@ -204,13 +204,14 @@ export default function App() {
   if (configError) {
     return (
       <div className="page">
+        <Topbar onGoHome={() => window.location.reload()} />
         <div className="alert alert-error">{configError}</div>
       </div>
     );
   }
 
   if (!config) {
-    return <div className="page page-loading">Yükleniyor…</div>;
+    return <div className="page"><Topbar onGoHome={() => window.location.reload()} /><div className="page-waiting">Yükleniyor…</div></div>;
   }
 
   const isStale = result && resultFlagsSig !== flagsSignature(flags);
