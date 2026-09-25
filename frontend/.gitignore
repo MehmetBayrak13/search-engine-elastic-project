@@ -13,6 +13,7 @@ dist-ssr
 *.local
 .env
 /public/downloads/*.zip
+/public/downloads/*.exe
 /public/downloads/*.sha256
 
 # Editor directories and files
