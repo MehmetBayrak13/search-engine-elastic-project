@@ -5,7 +5,7 @@ import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
 
 const manifest = JSON.parse(await readFile(new URL('../src/download.json', import.meta.url), 'utf8'));
-if (!/^[A-Za-z0-9.-]+\.zip$/.test(manifest.filename) || !/^[a-f0-9]{64}$/.test(manifest.sha256)) throw Error('Invalid download manifest');
+if (!/^[A-Za-z0-9.-]+\.(?:zip|exe)$/.test(manifest.filename) || !/^[a-f0-9]{64}$/.test(manifest.sha256)) throw Error('Invalid download manifest');
 const folder = new URL('../public/downloads/', import.meta.url);
 await mkdir(folder, { recursive: true });
 const file = new URL(manifest.filename, folder);
